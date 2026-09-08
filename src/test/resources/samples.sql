@@ -23,14 +23,13 @@ INSERT INTO student VALUES (1, 'Tom''s book', 90.5);
 -- 4. INSERT（中文字符 + 小写关键字）
 insert into student values (2, '你好世界', 85.0);
 
--- 5. SELECT（大小写混写关键字）
-SeLeCt * FrOm student;
+-- 5. SELECT（大小写混写关键字 + 带运算符的WHERE）
+SeLeCt * FrOm student WHERE score >= 90.0;
 
--- 6. SELECT（多行 + WHERE + 双字符运算符 + 转义字符串）
-SELECT id, name
-FROM student
-WHERE score >= 90.0
-  AND name != 'Tom''s book';   -- 双字符运算符与转义字符串
+-- 6. SELECT（多行注释后跟语句 + 转义字符串 + NOT 运算符）
+/* 多行注释：
+   下面的语句在注释结束后才开始 */
+SELECT name FROM student WHERE id != 3 AND NOT score < 60.0;
 
 -- 7. DELETE（OR 条件 + 转义字符串）
 DELETE FROM student WHERE name = 'Tom''s book' OR score <= 60.0;
@@ -38,10 +37,11 @@ DELETE FROM student WHERE name = 'Tom''s book' OR score <= 60.0;
 -- 8. DELETE（简单条件）
 DELETE FROM student WHERE id = 2;
 
--- 9. SELECT（多行注释后跟语句 + 带运算符的WHERE）
-/* 多行注释：
-   下面的语句在注释结束后才开始 */
-SELECT * FROM student WHERE id == 1;
+-- 9. SELECT（补充：多行 WHERE + 双字符运算符）
+SELECT id, name
+FROM student
+WHERE score >= 90.0
+  AND name != 'Tom''s book';   -- 双字符运算符与转义字符串
 
--- 10. SELECT（NOT 运算符）
-SELECT name FROM student WHERE id != 3 AND NOT score < 60.0;
+-- 10. INSERT（空字符串，补充INSERT覆盖）
+INSERT INTO student VALUES (3, '', 77.7);

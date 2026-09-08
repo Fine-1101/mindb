@@ -129,4 +129,21 @@ class RowEncoderTest {
 
         assertArrayEquals(values, decoded);
     }
+
+    @Test
+    void testIntVarcharMixedRow() {
+        // INT + VARCHAR 混合行（不含 FLOAT）
+        List<ColumnDef> cols = List.of(
+                new ColumnDef("id", DataType.INT, 0),
+                new ColumnDef("name", DataType.VARCHAR, 50)
+        );
+        Object[] values = {42, "测试混合行"};
+        byte[] encoded = RowEncoder.encode(cols, values);
+        Object[] decoded = RowEncoder.decode(cols, encoded);
+
+        assertArrayEquals(values, decoded);
+        // 验证类型一致
+        assertTrue(decoded[0] instanceof Integer);
+        assertTrue(decoded[1] instanceof String);
+    }
 }

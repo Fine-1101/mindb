@@ -1,0 +1,87 @@
+package com.minidb.storage;
+
+import java.util.Arrays;
+
+public class MemoryPage implements Page {
+    public static final int PAGE_SIZE = 4096;
+
+    private final int pageId;
+    private final byte[][] slots;
+    private int usedSpace;
+    private int nextSlot;
+    private static final int MAX_SLOTS = 1024;
+
+    public MemoryPage(int pageId) {
+        this.pageId = pageId;
+        this.slots = new byte[MAX_SLOTS][];
+        this.usedSpace = 0;
+        this.nextSlot = 0;
+    }
+
+    @Override
+    public int pageId() {
+        return pageId;
+    }
+
+    @Override
+    public int insertRow(byte[] row) {
+        if (row == null) {
+            return -1;
+        }
+
+        int rowSize = row.length;
+        if (freeSpace() < rowSize) {
+            return -1;
+        }
+
+        if (nextSlot >= MAX_SLOTS) {
+            return -1;
+        }
+
+        slots[nextSlot] = Arrays.copyOf(row, row.length);
+        usedSpace += rowSize;
+        return nextSlot++;
+    }
+
+    @Override
+    public byte[] readRow(int slot) {
+        if (slot < 0 || slot >= nextSlot) {
+            return null;
+        }
+        byte[] row = slots[slot];
+        if (row == null) {
+            return null;
+        }
+        return Arrays.copyOf(row, row.length);
+    }
+
+    @Override
+    public int freeSpace() {
+        return PAGE_SIZE - usedSpace;
+    }
+
+    // 测试需要的方法
+    public void deleteRow(int slot) {
+        if (slot < 0 || slot >= nextSlot) {
+            return;
+        }
+        if (slots[slot] != null) {
+            usedSpace -= slots[slot].length;
+            slots[slot] = null;
+        }
+    }
+
+    public int getUsedSpace() {
+        return usedSpace;
+    }
+
+    public int getRowCount() {
+        int count = 0;
+        for (int i = 0; i < nextSlot; i++) {
+            if (slots[i] != null) {
+                count++;
+            }
+        }
+        return count;
+    }
+}

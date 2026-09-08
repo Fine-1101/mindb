@@ -36,5 +36,8 @@ build/
 ### VS Code ###
 .vscode/
 
+### 本地 Maven 仓库 ###
+.m2repo/
+
 ### Mac OS ###
 .DS_Store

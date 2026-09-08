@@ -11,4 +11,6 @@ public interface PlanVisitor<R> {
     R visit(CreateTablePlan node);
 
     R visit(InsertPlan node);
+
+    R visit(DeletePlan node);
 }

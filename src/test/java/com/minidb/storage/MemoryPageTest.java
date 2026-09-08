@@ -38,7 +38,6 @@ class MemoryPageTest {
     void insertReturnsMinusOneWhenFull() {
         MemoryPage page = new MemoryPage(1);
 
-        // 先插入大量中等大小的行
         int inserted = 0;
         while (page.freeSpace() > 100) {
             int slot = page.insertRow(new byte[50]);
@@ -46,24 +45,19 @@ class MemoryPageTest {
             inserted++;
         }
 
-        // 然后尝试插入小数据，直到填满
         while (true) {
             int slot = page.insertRow(new byte[1]);
             if (slot == -1) break;
             inserted++;
         }
 
-        // 验证页面已满
-        assertTrue(page.freeSpace() == 0 || page.freeSpace() < 1,
-                "页面应该已满，当前空闲空间: " + page.freeSpace());
+        assertTrue(page.freeSpace() == 0 || page.freeSpace() < 1);
 
-        // 再次尝试插入，应该返回 -1
         int result = page.insertRow(new byte[1]);
-        assertEquals(-1, result, "页满后插入应该返回 -1");
+        assertEquals(-1, result);
 
-        // 验证之前的数据仍然存在
-        assertNotNull(page.readRow(0), "第一行数据应该存在");
-        assertTrue(inserted > 0, "应该至少插入了一行");
+        assertNotNull(page.readRow(0));
+        assertTrue(inserted > 0);
     }
 
     @Test
@@ -89,10 +83,11 @@ class MemoryPageTest {
         page.insertRow(row1);
         page.insertRow(row2);
 
+        // deleteRow 后 freeSpace 不变（契约要求）
         int freeBefore = page.freeSpace();
         page.deleteRow(0);
+        assertEquals(freeBefore, page.freeSpace(), "deleteRow 后 freeSpace 应该不变");
 
-        assertEquals(freeBefore + row1.length, page.freeSpace());
         assertNull(page.readRow(0));
         assertArrayEquals(row2, page.readRow(1));
     }
@@ -175,8 +170,7 @@ class MemoryPageTest {
             byte[] row = new byte[10];
             page.insertRow(row);
             int currentFree = page.freeSpace();
-            assertTrue(currentFree < previousFree,
-                    "空闲空间应该递减: 之前 " + previousFree + "，现在 " + currentFree);
+            assertTrue(currentFree < previousFree);
             assertEquals(previousFree - 10, currentFree);
             previousFree = currentFree;
         }
@@ -202,19 +196,19 @@ class MemoryPageTest {
 
             originalRows[i] = row;
             int slot = page.insertRow(row);
-            assertEquals(i, slot, "槽号应该递增: 期望 " + i + "，实际 " + slot);
+            assertEquals(i, slot);
         }
 
         for (int i = 0; i < 10; i++) {
             byte[] readRow = page.readRow(i);
-            assertArrayEquals(originalRows[i], readRow, "第 " + i + " 行数据应该完全一致");
+            assertArrayEquals(originalRows[i], readRow);
 
             int id = bytesToInt(readRow, 0);
             int nameLen = ((readRow[4] & 0xFF) << 8) | (readRow[5] & 0xFF);
             String name = new String(readRow, 6, nameLen);
 
-            assertEquals(i * 100, id, "ID应该匹配");
-            assertEquals("Row" + i, name, "名称应该匹配");
+            assertEquals(i * 100, id);
+            assertEquals("Row" + i, name);
         }
     }
 

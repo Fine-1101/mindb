@@ -56,19 +56,19 @@ public class MemoryPage implements Page {
     }
 
     @Override
-    public int freeSpace() {
-        return PAGE_SIZE - usedSpace;
-    }
-
-    // 测试需要的方法
     public void deleteRow(int slot) {
         if (slot < 0 || slot >= nextSlot) {
             return;
         }
         if (slots[slot] != null) {
-            usedSpace -= slots[slot].length;
+            // 标记删除，不回收空间（freeSpace 不变）
             slots[slot] = null;
         }
+    }
+
+    @Override
+    public int freeSpace() {
+        return PAGE_SIZE - usedSpace;
     }
 
     public int getUsedSpace() {

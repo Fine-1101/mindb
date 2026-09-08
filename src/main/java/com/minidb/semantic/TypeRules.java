@@ -5,7 +5,7 @@ import com.minidb.common.DataType;
 import java.util.Map;
 import java.util.Optional;
 
-/** 算术类型规则表（D1 骨架，D3 补全比较/逻辑运算规则）。 */
+/** 算术类型规则表（D1 骨架，D2 补全比较/逻辑/一元运算规则）。 */
 public final class TypeRules {
 
     private TypeRules() {}

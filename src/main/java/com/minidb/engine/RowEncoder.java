@@ -9,8 +9,8 @@ import java.util.List;
 
 /**
  * 行编解码器。
- * 格式: [1B null位图][INT 4B][FLOAT 8B][VARCHAR 2B长度+内容]
- * null位图: 每个bit对应一列，1表示null，0表示非null。最多支持8列。
+ * 格式: [null位图 (n+7)/8 B][INT 4B][FLOAT 8B][VARCHAR 2B长度+内容]
+ * null位图: 每个bit对应一列，1表示null，0表示非null，按列数取字节数。
  */
 public final class RowEncoder {
 
@@ -23,15 +23,14 @@ public final class RowEncoder {
      * @return 编码后的字节数组
      */
     public static byte[] encode(List<ColumnDef> columns, Object[] values) {
-        if (columns.size() > 8) {
-            throw new IllegalArgumentException("最多支持8列（null位图限制）");
-        }
         if (columns.size() != values.length) {
             throw new IllegalArgumentException("列数与值数不匹配");
         }
 
+        int bitmapBytes = (columns.size() + 7) / 8;
+
         // 先计算所需空间
-        int size = 1; // null位图
+        int size = bitmapBytes; // null位图
         for (int i = 0; i < columns.size(); i++) {
             if (values[i] == null) continue;
             ColumnDef col = columns.get(i);
@@ -45,10 +44,10 @@ public final class RowEncoder {
         ByteBuffer buf = ByteBuffer.allocate(size);
 
         // 写null位图
-        byte nullBitmap = 0;
+        byte[] nullBitmap = new byte[bitmapBytes];
         for (int i = 0; i < values.length; i++) {
             if (values[i] == null) {
-                nullBitmap |= (1 << i);
+                nullBitmap[i / 8] |= (byte) (1 << (i % 8));
             }
         }
         buf.put(nullBitmap);
@@ -78,19 +77,17 @@ public final class RowEncoder {
      * @return 值数组，null表示该列为NULL
      */
     public static Object[] decode(List<ColumnDef> columns, byte[] data) {
-        if (columns.size() > 8) {
-            throw new IllegalArgumentException("最多支持8列（null位图限制）");
-        }
-
         ByteBuffer buf = ByteBuffer.wrap(data);
 
         // 读null位图
-        byte nullBitmap = buf.get();
+        int bitmapBytes = (columns.size() + 7) / 8;
+        byte[] nullBitmap = new byte[bitmapBytes];
+        buf.get(nullBitmap);
         Object[] values = new Object[columns.size()];
 
         // 读各列值
         for (int i = 0; i < columns.size(); i++) {
-            if ((nullBitmap & (1 << i)) != 0) {
+            if ((nullBitmap[i / 8] & (1 << (i % 8))) != 0) {
                 values[i] = null;
                 continue;
             }

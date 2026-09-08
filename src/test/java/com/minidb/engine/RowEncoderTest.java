@@ -146,4 +146,27 @@ class RowEncoderTest {
         assertTrue(decoded[0] instanceof Integer);
         assertTrue(decoded[1] instanceof String);
     }
+
+    @Test
+    void testMoreThanEightColumns() {
+        // 超过8列：null位图按 (n+7)/8 字节扩展，不再有列数上限
+        List<ColumnDef> cols = List.of(
+                new ColumnDef("c1", DataType.INT, 0),
+                new ColumnDef("c2", DataType.INT, 0),
+                new ColumnDef("c3", DataType.INT, 0),
+                new ColumnDef("c4", DataType.INT, 0),
+                new ColumnDef("c5", DataType.INT, 0),
+                new ColumnDef("c6", DataType.INT, 0),
+                new ColumnDef("c7", DataType.INT, 0),
+                new ColumnDef("c8", DataType.INT, 0),
+                new ColumnDef("c9", DataType.INT, 0)
+        );
+        Object[] values = {1, 2, 3, 4, 5, 6, 7, null, 9};
+        byte[] encoded = RowEncoder.encode(cols, values);
+        Object[] decoded = RowEncoder.decode(cols, encoded);
+
+        assertArrayEquals(values, decoded);
+        // 9列 => 位图2字节 + 8个非null INT（第8列为null跳过）
+        assertEquals(2 + 4 * 8, encoded.length);
+    }
 }

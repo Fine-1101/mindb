@@ -2,7 +2,7 @@ package com.minidb.lexer;
 
 import com.minidb.common.MiniDbException;
 import com.minidb.common.Position;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -17,10 +17,10 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Lexer 单元测试（单文件）：
@@ -117,10 +117,10 @@ public class LexerTest {
                 // 小写与大写都必须识别为同一个关键字类型
                 for (String variant : new String[]{word, word.toUpperCase()}) {
                     List<Token> tokens = lex(variant);
-                    assertEquals("关键字 '" + variant + "' 应为 " + type,
-                            2, tokens.size());
-                    assertEquals("关键字 '" + variant + "' 应为 " + type,
-                            type, tok(tokens, 0).type());
+                    assertEquals(2, tokens.size(),
+                            "关键字 '" + variant + "' 应为 " + type);
+                    assertEquals(type, tok(tokens, 0).type(),
+                            "关键字 '" + variant + "' 应为 " + type);
                     assertEquals(TokenType.EOF, tok(tokens, 1).type());
                 }
                 seen.add(type);
@@ -275,7 +275,7 @@ public class LexerTest {
         for (Object[] c : cases) {
             String op = (String) c[0];
             List<Token> tokens = lex(op);
-            assertEquals("单字符(" + op + ") 应整体作为一个 Token: " + tokens, 2, tokens.size());
+            assertEquals(2, tokens.size(), "单字符(" + op + ") 应整体作为一个 Token: " + tokens);
             assertEquals(c[1], tok(tokens, 0).type());
             assertEquals(op, tok(tokens, 0).text());
             assertEquals(TokenType.EOF, tok(tokens, 1).type());
@@ -312,7 +312,7 @@ public class LexerTest {
             String s = (String) c[0];
             List<Token> tokens = lex(s);
             assertEquals(2, tokens.size());
-            assertEquals("字符 '" + s + "' 类型错误", c[1], tok(tokens, 0).type());
+            assertEquals(c[1], tok(tokens, 0).type(), "字符 '" + s + "' 类型错误");
             assertEquals(s, tok(tokens, 0).text());
         }
     }
@@ -528,7 +528,7 @@ public class LexerTest {
     @Test
     public void testSamplesSqlTokenizes() throws Exception {
         String sql = readResource("/samples.sql");
-        assertNotNull("samples.sql 资源不存在", sql);
+        assertNotNull(sql, "samples.sql 资源不存在");
         List<Token> tokens = lex(sql);
 
         // 整份文件可以切分：末尾为 EOF；恰好 10 条语句 => 10 个分号
@@ -556,9 +556,9 @@ public class LexerTest {
                 sawEmpty |= "".equals(t.value());
             }
         }
-        assertTrue("未发现 'Tom''s book' 转义样例", sawEscaped);
-        assertTrue("未发现中文样例", sawChinese);
-        assertTrue("未发现空字符串样例", sawEmpty);
+        assertTrue(sawEscaped, "未发现 'Tom''s book' 转义样例");
+        assertTrue(sawChinese, "未发现中文样例");
+        assertTrue(sawEmpty, "未发现空字符串样例");
     }
 
     // ==================================================================
@@ -759,7 +759,7 @@ public class LexerTest {
         String text = sb.toString();
         System.out.print(text);
         writeReportFile(text);
-        assertTrue("存在未通过的演示用例", report.fail() == 0);
+        assertTrue(report.fail() == 0, "存在未通过的演示用例");
     }
 
     // ------------------------------------------------------------------

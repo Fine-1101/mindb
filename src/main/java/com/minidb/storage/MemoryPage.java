@@ -2,14 +2,16 @@ package com.minidb.storage;
 
 import java.util.Arrays;
 
+/** 纯内存页（D1 交付）。freeSpace/删除语义按 Page 契约，与 SlottedPage 对拍一致。 */
 public class MemoryPage implements Page {
-    public static final int PAGE_SIZE = 4096;
+
+    /** 槽数组容量：按契约公式每行至少 1B+4B，最多约 819 行，槽数组不会触顶。 */
+    private static final int MAX_SLOTS = 1024;
 
     private final int pageId;
     private final byte[][] slots;
     private int usedSpace;
     private int nextSlot;
-    private static final int MAX_SLOTS = 1024;
 
     public MemoryPage(int pageId) {
         this.pageId = pageId;
@@ -29,17 +31,13 @@ public class MemoryPage implements Page {
             return -1;
         }
 
-        int rowSize = row.length;
-        if (freeSpace() < rowSize) {
-            return -1;
-        }
-
-        if (nextSlot >= MAX_SLOTS) {
+        int cost = row.length + SLOT_ENTRY_SIZE;
+        if (freeSpace() < cost) {
             return -1;
         }
 
         slots[nextSlot] = Arrays.copyOf(row, row.length);
-        usedSpace += rowSize;
+        usedSpace += cost;
         return nextSlot++;
     }
 
@@ -55,20 +53,18 @@ public class MemoryPage implements Page {
         return Arrays.copyOf(row, row.length);
     }
 
+    /** 标记删除：槽置空、readRow 返回 null；按契约不回收 freeSpace。 */
     @Override
-    public int freeSpace() {
-        return PAGE_SIZE - usedSpace;
-    }
-
-    // 测试需要的方法
     public void deleteRow(int slot) {
         if (slot < 0 || slot >= nextSlot) {
             return;
         }
-        if (slots[slot] != null) {
-            usedSpace -= slots[slot].length;
-            slots[slot] = null;
-        }
+        slots[slot] = null;
+    }
+
+    @Override
+    public int freeSpace() {
+        return PAGE_SIZE - usedSpace;
     }
 
     public int getUsedSpace() {

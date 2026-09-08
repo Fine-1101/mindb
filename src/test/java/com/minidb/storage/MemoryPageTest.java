@@ -30,8 +30,8 @@ class MemoryPageTest {
         byte[] row = new byte[100];
         page.insertRow(row);
 
-        assertEquals(initialFree - 100, page.freeSpace());
-        assertEquals(100, page.getUsedSpace());
+        assertEquals(initialFree - 100 - MemoryPage.SLOT_ENTRY_SIZE, page.freeSpace());
+        assertEquals(100 + MemoryPage.SLOT_ENTRY_SIZE, page.getUsedSpace());
     }
 
     @Test
@@ -53,8 +53,8 @@ class MemoryPageTest {
             inserted++;
         }
 
-        // 验证页面已满
-        assertTrue(page.freeSpace() == 0 || page.freeSpace() < 1,
+        // 验证页面已满（剩余空间放不下 1B 行 + 槽目录项）
+        assertTrue(page.freeSpace() < 1 + MemoryPage.SLOT_ENTRY_SIZE,
                 "页面应该已满，当前空闲空间: " + page.freeSpace());
 
         // 再次尝试插入，应该返回 -1
@@ -81,7 +81,7 @@ class MemoryPageTest {
     }
 
     @Test
-    void deleteRowReclaimsSpace() {
+    void deleteRowMarksDeletedWithoutReclaim() {
         MemoryPage page = new MemoryPage(1);
         byte[] row1 = new byte[]{1, 2, 3};
         byte[] row2 = new byte[]{4, 5, 6, 7};
@@ -92,7 +92,8 @@ class MemoryPageTest {
         int freeBefore = page.freeSpace();
         page.deleteRow(0);
 
-        assertEquals(freeBefore + row1.length, page.freeSpace());
+        // 标记删除：freeSpace 不回收（Page 契约，与 SlottedPage 对拍一致）
+        assertEquals(freeBefore, page.freeSpace());
         assertNull(page.readRow(0));
         assertArrayEquals(row2, page.readRow(1));
     }
@@ -130,8 +131,8 @@ class MemoryPageTest {
 
         int slot = page.insertRow(largeRow);
         assertEquals(0, slot);
-        assertEquals(4000, page.getUsedSpace());
-        assertEquals(MemoryPage.PAGE_SIZE - 4000, page.freeSpace());
+        assertEquals(4000 + MemoryPage.SLOT_ENTRY_SIZE, page.getUsedSpace());
+        assertEquals(MemoryPage.PAGE_SIZE - 4000 - MemoryPage.SLOT_ENTRY_SIZE, page.freeSpace());
 
         assertEquals(-1, page.insertRow(new byte[200]));
         assertArrayEquals(largeRow, page.readRow(0));
@@ -177,7 +178,7 @@ class MemoryPageTest {
             int currentFree = page.freeSpace();
             assertTrue(currentFree < previousFree,
                     "空闲空间应该递减: 之前 " + previousFree + "，现在 " + currentFree);
-            assertEquals(previousFree - 10, currentFree);
+            assertEquals(previousFree - 10 - MemoryPage.SLOT_ENTRY_SIZE, currentFree);
             previousFree = currentFree;
         }
     }

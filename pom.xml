@@ -30,6 +30,13 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
             </plugin>
+            <!-- 仅离线兼容：本机 .m2 无外网且未缓存 maven-resources-plugin 3.4.0，
+                 固定到已缓存的 3.3.1（联网环境同样可用，行为无差异）。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+            </plugin>
         </plugins>
     </build>
 

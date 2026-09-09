@@ -27,4 +27,10 @@ public interface Page {
     void deleteRow(int slot);
 
     int freeSpace();
+
+    /** 是否为脏页：insertRow/deleteRow 自动置脏，新建/从磁盘载入后为干净。 */
+    boolean isDirty();
+
+    /** 清除脏标记（flush/淘汰写盘后调用）。 */
+    void clearDirty();
 }

@@ -12,12 +12,14 @@ public class MemoryPage implements Page {
     private final byte[][] slots;
     private int usedSpace;
     private int nextSlot;
+    private boolean dirty;
 
     public MemoryPage(int pageId) {
         this.pageId = pageId;
         this.slots = new byte[MAX_SLOTS][];
         this.usedSpace = 0;
         this.nextSlot = 0;
+        this.dirty = false;  // 新建页干净
     }
 
     @Override
@@ -38,6 +40,7 @@ public class MemoryPage implements Page {
 
         slots[nextSlot] = Arrays.copyOf(row, row.length);
         usedSpace += cost;
+        dirty = true;  // 修改性操作置脏
         return nextSlot++;
     }
 
@@ -60,6 +63,7 @@ public class MemoryPage implements Page {
             return;
         }
         slots[slot] = null;
+        dirty = true;  // 修改性操作置脏
     }
 
     @Override
@@ -69,6 +73,21 @@ public class MemoryPage implements Page {
 
     public int getUsedSpace() {
         return usedSpace;
+    }
+
+    /** 下一个可用槽号（= 已分配过的槽数，含已删除的）。 */
+    public int getNextSlot() {
+        return nextSlot;
+    }
+
+    @Override
+    public boolean isDirty() {
+        return dirty;
+    }
+
+    @Override
+    public void clearDirty() {
+        this.dirty = false;
     }
 
     public int getRowCount() {

@@ -84,6 +84,9 @@ public class Parser {
     /**
      * 解析多条以 ; 分隔的语句；空语句（;;）、纯注释输入返回空列表。
      *
+     * <p>错误恢复语义：单条语句失败记录错误并跳到下一个 ; 重同步继续；
+     * 结束后若有错误抛第一条（消息附全部错误位置清单）。
+     *
      * @param tokens Lexer 输出
      * @return 语句 AST 列表（保持源码顺序）
      * @throws MiniDbException 某条语句语法错误（position 指向该语句出错 Token）
@@ -91,6 +94,7 @@ public class Parser {
     public List<Statement> parseScript(List<Token> tokens) throws MiniDbException {
         init(tokens);
         List<Statement> statements = new ArrayList<>();
+        List<MiniDbException> errors = new ArrayList<>();
         while (true) {
             // 跳过空语句（;; 以及开头/结尾多余的 ;）
             while (check(TokenType.SEMI)) {
@@ -99,17 +103,41 @@ public class Parser {
             if (check(TokenType.EOF)) {
                 break;
             }
-            Statement stmt = parseStatement();
-            statements.add(stmt);
-            if (check(TokenType.EOF)) {
-                break;
+            try {
+                Statement stmt = parseStatement();
+                statements.add(stmt);
+            } catch (MiniDbException e) {
+                errors.add(e);
+                resync();  // 跳到下一个 ; 或 EOF
             }
-            if (!check(TokenType.SEMI)) {
-                throw error(peek(), TokenType.SEMI);
+            // 消费分号（如果有）
+            if (check(TokenType.SEMI)) {
+                advance();
             }
-            advance();
+        }
+        if (!errors.isEmpty()) {
+            // 抛第一条错误，消息附全部错误位置清单
+            MiniDbException first = errors.get(0);
+            if (errors.size() > 1) {
+                StringBuilder sb = new StringBuilder(first.getMessage());
+                sb.append(" (\u5171 ").append(errors.size()).append(" 条错误:");
+                for (int i = 0; i < errors.size(); i++) {
+                    MiniDbException e = errors.get(i);
+                    sb.append("\n  [").append(e.phase()).append(" @ ").append(e.pos()).append("] ").append(e.getMessage());
+                }
+                sb.append(')');
+                throw new MiniDbException(first.phase(), first.pos(), sb.toString());
+            }
+            throw first;
         }
         return statements;
+    }
+
+    /** 重同步：跳过当前语句剩余 token 直到遇到 ; 或 EOF。 */
+    private void resync() {
+        while (!check(TokenType.SEMI) && !check(TokenType.EOF)) {
+            advance();
+        }
     }
 
     // ==================================================================

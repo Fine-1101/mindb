@@ -9,6 +9,8 @@ import com.minidb.lexer.Lexer;
 import com.minidb.lexer.Token;
 import com.minidb.parser.Parser;
 import com.minidb.plan.*;
+import com.minidb.planner.Optimizer;
+import com.minidb.planner.Planner;
 import com.minidb.semantic.SemanticAnalyzer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,8 +22,8 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 优化等价性参数化测试：10 组 SQL，executeQuery(optimize(buildPlan(s))) 与 executeQuery(buildPlan(s)) 结果集相等。
- * 当前优化器为恒等，此测试验证框架正确性。
+ * 优化等价性参数化测试：10 组 SQL，executeQuery(optimize(plan(s))) 与 executeQuery(plan(s)) 结果集相等。
+ * 接入 B 的 Optimizer 真实规则（常量折叠/布尔化简/冗余消除）。
  */
 class OptimizationEquivalenceTest {
 
@@ -32,6 +34,7 @@ class OptimizationEquivalenceTest {
     private Parser parser;
     private SemanticAnalyzer analyzer;
     private Planner planner;
+    private Optimizer optimizer;
 
     @BeforeEach
     void setup() throws MiniDbException {
@@ -41,7 +44,8 @@ class OptimizationEquivalenceTest {
         lexer = new Lexer();
         parser = new Parser();
         analyzer = new SemanticAnalyzer(catalog);
-        planner = new Planner();
+        planner = new Planner(catalog);
+        optimizer = new Optimizer();
 
         // 建表 + 插入数据
         runDdl("CREATE TABLE student (id INT, name VARCHAR(50), score FLOAT)");
@@ -72,9 +76,8 @@ class OptimizationEquivalenceTest {
         var stmt = stmts.get(0);
         analyzer.analyze(stmt);
 
-        TableDef tableDef = catalog.findTable("student").orElseThrow();
-        PlanNode plan = planner.buildPlan(stmt, tableDef);
-        PlanNode optimized = optimize(plan);  // 当前恒等
+        PlanNode plan = planner.plan(stmt);
+        PlanNode optimized = optimizer.optimize(plan);
 
         List<Object[]> baseResults = engine.executeQuery(plan);
         List<Object[]> optResults = engine.executeQuery(optimized);
@@ -87,21 +90,12 @@ class OptimizationEquivalenceTest {
         }
     }
 
-    private PlanNode optimize(PlanNode plan) {
-        return plan;  // 恒等优化
-    }
-
     private void runDdl(String sql) throws MiniDbException {
         List<Token> tokens = lexer.tokenize(sql);
         var stmts = parser.parseScript(tokens);
         for (var stmt : stmts) {
             analyzer.analyze(stmt);
-            TableDef tableDef = switch (stmt) {
-                case com.minidb.ast.InsertStmt s -> catalog.findTable(s.tableName()).orElse(null);
-                case com.minidb.ast.SelectStmt s -> catalog.findTable(s.tableName()).orElse(null);
-                default -> null;
-            };
-            PlanNode plan = planner.buildPlan(stmt, tableDef);
+            PlanNode plan = planner.plan(stmt);
             if (stmt instanceof com.minidb.ast.SelectStmt) {
                 engine.executeQuery(plan);
             } else {

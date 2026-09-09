@@ -259,8 +259,7 @@ public class Engine {
             Page page = pool.getPage(tableNameKey, pageId);
             if (page == null) continue;
 
-            int maxSlot = (page instanceof com.minidb.storage.MemoryPage mp) ? mp.getNextSlot() : 0;
-            for (int slot = 0; slot < maxSlot; slot++) {
+            for (int slot = 0; slot < page.slotCount(); slot++) {
                 byte[] raw = page.readRow(slot);
                 if (raw == null) continue;  // 已删除
 
@@ -299,5 +298,15 @@ public class Engine {
     /** 获取指定表的页 ID 列表（测试/调试用）。 */
     public List<Integer> getTablePageIds(String tableName) {
         return tablePages.getOrDefault(tableName.toLowerCase(), List.of());
+    }
+
+    /** 重启恢复：按磁盘文件页数重建表的页映射（页 id 0..n-1，由文件长度推导）。 */
+    public void recoverTablePages(String tableName, int pageCount) {
+        String key = tableName.toLowerCase();
+        List<Integer> ids = new ArrayList<>();
+        for (int i = 0; i < pageCount; i++) {
+            ids.add(i);
+        }
+        tablePages.put(key, ids);
     }
 }

@@ -9,26 +9,35 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * 磁盘缓冲池：每表一个 data/&lt;table&gt;.dat 文件，页定长 [4B 槽数][PAGE_SIZE 页体]。
+ *
+ * <p>缓存按 (表名, pageId) 复合键分桶——各表 pageId 独立编号，全局 int 键会撞号；
+ * 淘汰/flushAll 仅写脏页且按页所属表直达写回。pageId 存在于文件时 getPage 永不返回 null
+ * （未命中从盘重载）。
+ */
 public class DiskBufferPool implements BufferPool {
     private static final String DATA_DIR = "data";
     private final int capacity;
     private final Map<String, TableFile> tableFiles;
-    private final Map<Integer, Page> cache;
-    private final List<Integer> accessOrder;
-    private final AtomicInteger nextPageId;
+    /** 缓存：表名 → (pageId → 页)。页 ID 每表独立编号，必须按表分桶。 */
+    private final Map<String, Map<Integer, Page>> cache;
+    /** LRU 淘汰序：复合键 tableName#pageId，与 cache 一致。 */
+    private final List<String> accessOrder;
     private final AtomicLong hits;
     private final AtomicLong misses;
     private boolean closed;
 
     public DiskBufferPool(int capacity) {
+        if (capacity <= 0) {
+            throw new IllegalArgumentException("Capacity must be positive");
+        }
         this.capacity = capacity;
         this.tableFiles = new ConcurrentHashMap<>();
         this.cache = new ConcurrentHashMap<>();
         this.accessOrder = Collections.synchronizedList(new ArrayList<>());
-        this.nextPageId = new AtomicInteger(0);
         this.hits = new AtomicLong(0);
         this.misses = new AtomicLong(0);
         this.closed = false;
@@ -42,91 +51,87 @@ public class DiskBufferPool implements BufferPool {
 
     @Override
     public Page getPage(String tableName, int pageId) {
-        if (closed) {
-            throw new IllegalStateException("BufferPool is closed");
-        }
+        ensureOpen();
+        String key = cacheKey(tableName, pageId);
 
         // 1. 先查缓存
-        if (cache.containsKey(pageId)) {
+        Page cached = cache.getOrDefault(tableName, Map.of()).get(pageId);
+        if (cached != null) {
             hits.incrementAndGet();
-            synchronized (accessOrder) {
-                accessOrder.remove(Integer.valueOf(pageId));
-                accessOrder.add(pageId);
-            }
-            return cache.get(pageId);
+            touch(key);
+            return cached;
         }
 
-        // 2. 缓存未命中 -> 从文件加载
+        // 2. 缓存未命中 → 从文件加载
         misses.incrementAndGet();
-        TableFile tf = getTableFile(tableName);
-
-        // 3. 检查 pageId 是否存在于文件中
-        if (pageId < tf.getPageCount()) {
-            SlottedPage page = tf.loadPage(pageId);
-            if (page != null) {
-                addToCache(pageId, page);
-                return page;
-            }
+        SlottedPage loaded = getTableFile(tableName).loadPage(pageId);
+        if (loaded == null) {
+            // pageId 超出文件页数（调用方应保证合法），兜底返回 null
+            return null;
         }
-
-        // 4. pageId 不存在于文件中 -> 返回 null（兜底，调用方应保证 pageId 合法）
-        return null;
+        addToCache(tableName, key, loaded);
+        return loaded;
     }
 
     @Override
     public Page newPage(String tableName) {
-        if (closed) {
-            throw new IllegalStateException("BufferPool is closed");
-        }
-
+        ensureOpen();
         TableFile tf = getTableFile(tableName);
         int pageId = tf.getPageCount();
         SlottedPage page = new SlottedPage(pageId);
         page.markDirty();
 
         tf.appendPage(page);
-        addToCache(pageId, page);
+        addToCache(tableName, cacheKey(tableName, pageId), page);
 
         return page;
     }
 
-    private void addToCache(int pageId, Page page) {
+    private void addToCache(String tableName, String key, Page page) {
         if (cache.size() >= capacity) {
             evict();
         }
-
-        cache.put(pageId, page);
+        cache.computeIfAbsent(tableName, k -> new HashMap<>()).put(page.pageId(), page);
         synchronized (accessOrder) {
-            accessOrder.add(pageId);
+            accessOrder.add(key);
+        }
+    }
+
+    private void touch(String key) {
+        if (accessOrder.remove(key)) {
+            synchronized (accessOrder) {
+                accessOrder.add(key);
+            }
         }
     }
 
     private void evict() {
-        if (cache.isEmpty()) {
-            return;
-        }
-
-        int victimId;
+        String victimKey;
         synchronized (accessOrder) {
-            victimId = accessOrder.remove(0);
+            if (accessOrder.isEmpty()) {
+                return;
+            }
+            victimKey = accessOrder.remove(0);
         }
+        int sep = victimKey.indexOf('#');
+        String tableName = victimKey.substring(0, sep);
+        int pageId = Integer.parseInt(victimKey.substring(sep + 1));
 
-        Page victim = cache.remove(victimId);
+        Map<Integer, Page> pages = cache.get(tableName);
+        Page victim = pages == null ? null : pages.remove(pageId);
+        if (pages != null && pages.isEmpty()) {
+            cache.remove(tableName, pages);
+        }
         if (victim != null && victim.isDirty()) {
-            writePage(victim);
+            writePage(tableName, victim);
         }
     }
 
-    private void writePage(Page page) {
-        if (!(page instanceof SlottedPage)) {
-            return;
-        }
-        SlottedPage sp = (SlottedPage) page;
-        for (Map.Entry<String, TableFile> entry : tableFiles.entrySet()) {
-            if (entry.getValue().writePage(sp)) {
-                sp.markClean();
-                return;
-            }
+    /** 按页所属表直达写回。 */
+    private void writePage(String tableName, Page page) {
+        if (page instanceof SlottedPage sp) {
+            getTableFile(tableName).writePage(sp);
+            sp.markClean();
         }
     }
 
@@ -135,11 +140,11 @@ public class DiskBufferPool implements BufferPool {
         if (closed) {
             return;
         }
-
-        for (Page page : cache.values()) {
-            if (page.isDirty()) {
-                writePage(page);
-                page.markClean();
+        for (Map.Entry<String, Map<Integer, Page>> entry : cache.entrySet()) {
+            for (Page page : entry.getValue().values()) {
+                if (page.isDirty()) {
+                    writePage(entry.getKey(), page);
+                }
             }
         }
         for (TableFile tf : tableFiles.values()) {
@@ -152,28 +157,32 @@ public class DiskBufferPool implements BufferPool {
         return new BufferPoolStats(hits.get(), misses.get());
     }
 
-    private TableFile getTableFile(String tableName) {
-        return tableFiles.computeIfAbsent(tableName, k -> new TableFile(tableName));
-    }
-
+    /** 表的磁盘页数：已打开的表用记录值，否则按文件长度推算（重启恢复入口，不产生打开副作用）。 */
     public int getTablePageCount(String tableName) {
         TableFile tf = tableFiles.get(tableName);
-        return tf != null ? tf.getPageCount() : 0;
+        if (tf != null) {
+            return tf.getPageCount();
+        }
+        Path file = Paths.get(DATA_DIR, tableName + ".dat");
+        if (!Files.exists(file)) {
+            return 0;
+        }
+        return (int) (file.toFile().length() / (Page.PAGE_SIZE + Page.DISK_PREFIX_SIZE));
     }
 
-    public Set<Integer> getCacheContent() {
-        return new HashSet<>(cache.keySet());
+    public Set<String> getCacheContent() {
+        synchronized (accessOrder) {
+            return new HashSet<>(accessOrder);
+        }
     }
 
-    /**
-     * 关闭缓冲池，释放所有文件资源
-     */
+    /** 关闭缓冲池：先刷脏再释放文件资源。 */
     public void close() {
         if (closed) {
             return;
         }
-        closed = true;
         flushAll();
+        closed = true;
         for (TableFile tf : tableFiles.values()) {
             tf.close();
         }
@@ -184,23 +193,33 @@ public class DiskBufferPool implements BufferPool {
         }
     }
 
+    private void ensureOpen() {
+        if (closed) {
+            throw new IllegalStateException("BufferPool is closed");
+        }
+    }
+
+    private TableFile getTableFile(String tableName) {
+        return tableFiles.computeIfAbsent(tableName, k -> new TableFile(tableName));
+    }
+
+    private static String cacheKey(String tableName, int pageId) {
+        return tableName + "#" + pageId;
+    }
+
+    /** 表文件：页定长 [4B 槽数][PAGE_SIZE 页体]，pageId 偏移 pageId*(PAGE_SIZE+4)。 */
     private static class TableFile {
         private final String tableName;
         private final Path filePath;
-        private RandomAccessFile raf;
+        private final RandomAccessFile raf;
         private int pageCount;
 
         TableFile(String tableName) {
             this.tableName = tableName;
             this.filePath = Paths.get(DATA_DIR, tableName + ".dat");
             try {
-                if (Files.exists(filePath)) {
-                    this.raf = new RandomAccessFile(filePath.toFile(), "rw");
-                    this.pageCount = (int) (raf.length() / (Page.PAGE_SIZE + Page.DISK_PREFIX_SIZE));
-                } else {
-                    this.raf = new RandomAccessFile(filePath.toFile(), "rw");
-                    this.pageCount = 0;
-                }
+                this.raf = new RandomAccessFile(filePath.toFile(), "rw");
+                this.pageCount = (int) (raf.length() / (Page.PAGE_SIZE + Page.DISK_PREFIX_SIZE));
             } catch (IOException e) {
                 throw new RuntimeException("Failed to open table file: " + tableName, e);
             }
@@ -212,12 +231,14 @@ public class DiskBufferPool implements BufferPool {
 
         SlottedPage loadPage(int pageId) {
             try {
+                if (pageId < 0 || pageId >= pageCount) {
+                    return null;
+                }
                 long offset = (long) pageId * (Page.PAGE_SIZE + Page.DISK_PREFIX_SIZE);
                 raf.seek(offset);
 
                 byte[] prefix = new byte[Page.DISK_PREFIX_SIZE];
-                int read = raf.read(prefix);
-                if (read != Page.DISK_PREFIX_SIZE) {
+                if (raf.read(prefix) != Page.DISK_PREFIX_SIZE) {
                     return null;
                 }
                 int slotCount = ((prefix[0] & 0xFF) << 24) |
@@ -226,8 +247,7 @@ public class DiskBufferPool implements BufferPool {
                         (prefix[3] & 0xFF);
 
                 byte[] pageData = new byte[Page.PAGE_SIZE];
-                read = raf.read(pageData);
-                if (read != Page.PAGE_SIZE) {
+                if (raf.read(pageData) != Page.PAGE_SIZE) {
                     return null;
                 }
 
@@ -244,22 +264,12 @@ public class DiskBufferPool implements BufferPool {
         boolean writePage(SlottedPage page) {
             try {
                 int pageId = page.pageId();
-                if (pageId >= pageCount) {
+                if (pageId < 0 || pageId >= pageCount) {
                     return false;
                 }
-
                 long offset = (long) pageId * (Page.PAGE_SIZE + Page.DISK_PREFIX_SIZE);
                 raf.seek(offset);
-
-                int slotCount = page.getSlotCount();
-                byte[] prefix = new byte[Page.DISK_PREFIX_SIZE];
-                prefix[0] = (byte) (slotCount >> 24);
-                prefix[1] = (byte) (slotCount >> 16);
-                prefix[2] = (byte) (slotCount >> 8);
-                prefix[3] = (byte) slotCount;
-                raf.write(prefix);
-                raf.write(page.getPageData());
-
+                writePageBytes(page);
                 return true;
             } catch (IOException e) {
                 throw new RuntimeException("Failed to write page: " + page.pageId(), e);
@@ -269,20 +279,22 @@ public class DiskBufferPool implements BufferPool {
         void appendPage(SlottedPage page) {
             try {
                 raf.seek(raf.length());
-
-                int slotCount = page.getSlotCount();
-                byte[] prefix = new byte[Page.DISK_PREFIX_SIZE];
-                prefix[0] = (byte) (slotCount >> 24);
-                prefix[1] = (byte) (slotCount >> 16);
-                prefix[2] = (byte) (slotCount >> 8);
-                prefix[3] = (byte) slotCount;
-                raf.write(prefix);
-                raf.write(page.getPageData());
-
+                writePageBytes(page);
                 pageCount++;
             } catch (IOException e) {
                 throw new RuntimeException("Failed to append page", e);
             }
+        }
+
+        private void writePageBytes(SlottedPage page) throws IOException {
+            int slotCount = page.slotCount();
+            byte[] prefix = new byte[Page.DISK_PREFIX_SIZE];
+            prefix[0] = (byte) (slotCount >> 24);
+            prefix[1] = (byte) (slotCount >> 16);
+            prefix[2] = (byte) (slotCount >> 8);
+            prefix[3] = (byte) slotCount;
+            raf.write(prefix);
+            raf.write(page.getPageData());
         }
 
         void flush() {

@@ -32,7 +32,7 @@ public class MemoryPage implements Page {
         }
 
         int rowSize = row.length;
-        if (freeSpace() < rowSize) {
+        if (freeSpace() < rowSize + SLOT_ENTRY_SIZE) {
             return -1;
         }
 
@@ -91,6 +91,12 @@ public class MemoryPage implements Page {
 
     public int getUsedSpace() {
         return usedSpace;
+    }
+
+    /** 已分配槽位数（含已删除槽），SeqScan/DELETE 据此确定迭代边界。 */
+    @Override
+    public int slotCount() {
+        return nextSlot;
     }
 
     public int getRowCount() {

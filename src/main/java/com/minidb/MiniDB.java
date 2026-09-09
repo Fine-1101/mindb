@@ -2,6 +2,7 @@ package com.minidb;
 
 import com.minidb.ast.*;
 import com.minidb.buffer.BufferPool;
+import com.minidb.buffer.DiskBufferPool;
 import com.minidb.buffer.InMemoryBufferPool;
 import com.minidb.catalog.*;
 import com.minidb.common.MiniDbException;
@@ -10,6 +11,8 @@ import com.minidb.lexer.Lexer;
 import com.minidb.lexer.Token;
 import com.minidb.parser.Parser;
 import com.minidb.plan.*;
+import com.minidb.planner.Optimizer;
+import com.minidb.planner.Planner;
 import com.minidb.semantic.SemanticAnalyzer;
 
 import java.io.BufferedReader;
@@ -36,21 +39,59 @@ public class MiniDB {
     private final BufferPool pool;
     private final Engine engine;
     private final SemanticAnalyzer semanticAnalyzer;
-    private final Planner planner = new Planner();
+    private final Planner planner;
+    private final Optimizer optimizer = new Optimizer();
 
+    /** 默认内存模式。 */
     public MiniDB() {
-        this.catalog = new MemoryCatalog();
-        this.pool = new InMemoryBufferPool();
+        this(false);
+    }
+
+    /**
+     * @param diskMode true = 磁盘模式（DiskBufferPool + PersistentCatalog + 重启恢复），
+     *                 false = 内存模式（InMemoryBufferPool + MemoryCatalog）
+     */
+    public MiniDB(boolean diskMode) {
+        if (diskMode) {
+            this.catalog = new PersistentCatalog();
+            this.pool = new DiskBufferPool(64);
+        } else {
+            this.catalog = new MemoryCatalog();
+            this.pool = new InMemoryBufferPool();
+        }
         this.engine = new Engine(catalog, pool);
         this.semanticAnalyzer = new SemanticAnalyzer(catalog);
+        this.planner = new Planner(catalog);
+        if (diskMode) {
+            recoverFromDisk();
+        }
+    }
+
+    /** 磁盘模式重启恢复：按文件页数重建表的页映射（页 id 0..n-1）。 */
+    private void recoverFromDisk() {
+        if (catalog instanceof PersistentCatalog pc && pool instanceof DiskBufferPool dp) {
+            for (TableDef t : pc.getAllTables()) {
+                engine.recoverTablePages(t.tableName(), dp.getTablePageCount(t.tableName().toLowerCase()));
+            }
+        }
     }
 
     public static void main(String[] args) {
-        MiniDB db = new MiniDB();
+        boolean diskMode = false;
+        String scriptPath = null;
+        for (String arg : args) {
+            if ("--disk".equals(arg)) {
+                diskMode = true;
+            } else if (!arg.isEmpty()) {
+                scriptPath = arg;
+            }
+        }
 
-        // --script 模式
-        if (args.length > 0 && "--script".equals(args[0]) && args.length > 1) {
-            db.runScript(args[1]);
+        MiniDB db = new MiniDB(diskMode);
+
+        // --script 模式（--script demo.sql，可与 --disk 组合）
+        if (scriptPath != null) {
+            db.runScript(scriptPath);
             return;
         }
 
@@ -111,9 +152,8 @@ public class MiniDB {
     private void executeStatement(Statement stmt) throws MiniDbException {
         semanticAnalyzer.analyze(stmt);
 
-        TableDef tableDef = getTableDefForPlan(stmt);
-        PlanNode plan = planner.buildPlan(stmt, tableDef);
-        PlanNode optimized = optimize(plan);  // 当前恒等优化
+        PlanNode plan = planner.plan(stmt);
+        PlanNode optimized = optimizer.optimize(plan);
 
         if (stmt instanceof SelectStmt) {
             List<Object[]> results = engine.executeQuery(optimized);
@@ -158,13 +198,12 @@ public class MiniDB {
             // 3 & 4 & 5: 对每条语句
             for (Statement stmt : stmts) {
                 semanticAnalyzer.analyze(stmt);
-                TableDef tableDef = getTableDefForPlan(stmt);
-                PlanNode plan = planner.buildPlan(stmt, tableDef);
+                PlanNode plan = planner.plan(stmt);
 
                 System.out.println("── Plan(优化前) ──");
                 printPlanTree(plan, "  ");
 
-                PlanNode optimized = optimize(plan);
+                PlanNode optimized = optimizer.optimize(plan);
                 System.out.println("── Plan(优化后) ──");
                 printPlanTree(optimized, "  ");
 
@@ -219,15 +258,6 @@ public class MiniDB {
         } catch (IOException e) {
             System.err.println("读取脚本文件失败: " + e.getMessage());
         }
-    }
-
-    // ------------------------------------------------------------------
-    // 优化（当前恒等，预留扩展）
-    // ------------------------------------------------------------------
-
-    /** 恒等优化：直接返回原计划。后续可加投影裁剪、谓词下推等。 */
-    private PlanNode optimize(PlanNode plan) {
-        return plan;
     }
 
     // ------------------------------------------------------------------
@@ -372,15 +402,6 @@ public class MiniDB {
     // ------------------------------------------------------------------
     // 辅助
     // ------------------------------------------------------------------
-
-    private TableDef getTableDefForPlan(Statement stmt) {
-        return switch (stmt) {
-            case SelectStmt s -> catalog.findTable(s.tableName()).orElse(null);
-            case DeleteStmt s -> catalog.findTable(s.tableName()).orElse(null);
-            case CreateTableStmt s -> null;
-            case InsertStmt s -> catalog.findTable(s.tableName()).orElse(null);
-        };
-    }
 
     private void printError(MiniDbException e) {
         String pos = e.pos() != null ? " @ " + e.pos() : "";

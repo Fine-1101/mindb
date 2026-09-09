@@ -16,7 +16,7 @@ class SlottedPageTest {
             assertEquals(i, slot);
         }
 
-        assertEquals(10, page.getSlotCount());
+        assertEquals(10, page.slotCount());
     }
 
     @Test

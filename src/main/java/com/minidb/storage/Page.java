@@ -21,6 +21,9 @@ public interface Page {
 
     int freeSpace();
 
+    /** 已分配槽位数（含已删除槽），SeqScan/DELETE 据此确定迭代边界。 */
+    int slotCount();
+
     /** 页是否脏（被修改过） */
     boolean isDirty();
 

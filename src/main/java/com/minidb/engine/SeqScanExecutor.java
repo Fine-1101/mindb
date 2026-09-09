@@ -50,7 +50,7 @@ public class SeqScanExecutor implements Executor {
     public Object[] next() throws MiniDbException {
         while (currentPage != null) {
             // 扫描当前页的所有槽
-            while (currentSlot < getMaxSlot()) {
+            while (currentSlot < currentPage.slotCount()) {
                 byte[] raw = currentPage.readRow(currentSlot);
                 currentSlot++;
                 if (raw != null) {
@@ -77,18 +77,5 @@ public class SeqScanExecutor implements Executor {
     @Override
     public void close() {
         // 内存实现无需释放资源
-    }
-
-    /** 获取当前页的最大槽号（nextSlot），MemoryPage 暴露此信息。 */
-    private int getMaxSlot() {
-        if (currentPage instanceof com.minidb.storage.MemoryPage mp) {
-            // 通过反射或直接方式获取 nextSlot
-            // MemoryPage 没有公开的 nextSlot getter，但我们可以通过 getRowCount 和 slots 数组长度推断
-            // 实际上我们需要遍历到 nextSlot 而不是 PAGE_SIZE
-            // 使用 getUsedSpace 来推断也不可靠
-            // 最安全的方式：给 MemoryPage 加一个 getNextSlot() 方法
-            return mp.getNextSlot();
-        }
-        return 0;
     }
 }

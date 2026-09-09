@@ -149,7 +149,8 @@ public class SlottedPage implements Page {
         this.dirty = true;
     }
 
-    public int getSlotCount() {
+    @Override
+    public int slotCount() {
         return slotCount;
     }
 

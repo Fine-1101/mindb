@@ -103,9 +103,9 @@ class LiveReproductionTest {
         // insertRow 后置脏
         page.insertRow(new byte[]{1, 2, 3});
         org.junit.jupiter.api.Assertions.assertTrue(page.isDirty(), "insertRow 后应脏");
-        // clearDirty 后干净
-        page.clearDirty();
-        org.junit.jupiter.api.Assertions.assertFalse(page.isDirty(), "clearDirty 后应干净");
+        // markClean 后干净
+        page.markClean();
+        org.junit.jupiter.api.Assertions.assertFalse(page.isDirty(), "markClean 后应干净");
         // deleteRow 后置脏
         page.deleteRow(0);
         org.junit.jupiter.api.Assertions.assertTrue(page.isDirty(), "deleteRow 后应脏");

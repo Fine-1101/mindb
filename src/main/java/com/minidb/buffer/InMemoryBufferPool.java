@@ -52,7 +52,7 @@ public class InMemoryBufferPool implements BufferPool {
         for (Map<Integer, Page> pages : tablePages.values()) {
             for (Page page : pages.values()) {
                 if (page.isDirty()) {
-                    page.clearDirty();
+                    page.markClean();
                 }
             }
         }

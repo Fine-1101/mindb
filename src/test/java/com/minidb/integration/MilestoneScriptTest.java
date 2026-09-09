@@ -11,6 +11,7 @@ import com.minidb.lexer.Lexer;
 import com.minidb.lexer.Token;
 import com.minidb.parser.Parser;
 import com.minidb.plan.*;
+import com.minidb.planner.Planner;
 import com.minidb.semantic.SemanticAnalyzer;
 import org.junit.jupiter.api.Test;
 
@@ -31,14 +32,13 @@ class MilestoneScriptTest {
         Lexer lexer = new Lexer();
         Parser parser = new Parser();
         SemanticAnalyzer analyzer = new SemanticAnalyzer(catalog);
-        Planner planner = new Planner();
+        Planner planner = new Planner(catalog);
 
         List<Token> tokens = lexer.tokenize(script);
         List<com.minidb.ast.Statement> stmts = parser.parseScript(tokens);
         for (com.minidb.ast.Statement stmt : stmts) {
             analyzer.analyze(stmt);
-            TableDef tableDef = getTableDef(catalog, stmt);
-            PlanNode plan = planner.buildPlan(stmt, tableDef);
+            PlanNode plan = planner.plan(stmt);
             if (stmt instanceof com.minidb.ast.SelectStmt) {
                 engine.executeQuery(plan);
             } else {
@@ -110,14 +110,5 @@ class MilestoneScriptTest {
         assertEquals(2, results.size());
         assertEquals("Alice", results.get(0)[1]);
         assertEquals("Charlie", results.get(1)[1]);
-    }
-
-    private TableDef getTableDef(Catalog catalog, com.minidb.ast.Statement stmt) {
-        return switch (stmt) {
-            case com.minidb.ast.SelectStmt s -> catalog.findTable(s.tableName()).orElse(null);
-            case com.minidb.ast.DeleteStmt s -> catalog.findTable(s.tableName()).orElse(null);
-            case com.minidb.ast.InsertStmt s -> catalog.findTable(s.tableName()).orElse(null);
-            default -> null;
-        };
     }
 }

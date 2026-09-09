@@ -9,12 +9,17 @@ import java.util.List;
 
 /**
  * 行编解码器。
- * 格式: [null位图 (n+7)/8 B][INT 4B][FLOAT 8B][VARCHAR 2B长度+内容]
- * null位图: 每个bit对应一列，1表示null，0表示非null，按列数取字节数。
+ * 格式: [null位图 (n+7)/8 B][定长区: INT 4B / FLOAT 8B][变长区: VARCHAR 2B长度+UTF-8内容]
+ * 按列定义顺序编码。null 位图每个 bit 对应一列，1 表示 null，0 表示非null。
  */
 public final class RowEncoder {
 
     private RowEncoder() {}
+
+    /** null 位图字节数：每 8 列 1 字节。 */
+    private static int bitmapSize(int columnCount) {
+        return (columnCount + 7) / 8;
+    }
 
     /**
      * 编码一行数据。
@@ -27,10 +32,10 @@ public final class RowEncoder {
             throw new IllegalArgumentException("列数与值数不匹配");
         }
 
-        int bitmapBytes = (columns.size() + 7) / 8;
+        int bitmapBytes = bitmapSize(columns.size());
 
         // 先计算所需空间
-        int size = bitmapBytes; // null位图
+        int size = bitmapBytes;
         for (int i = 0; i < columns.size(); i++) {
             if (values[i] == null) continue;
             ColumnDef col = columns.get(i);
@@ -38,17 +43,17 @@ public final class RowEncoder {
                 case INT -> 4;
                 case FLOAT -> 8;
                 case VARCHAR -> 2 + ((String) values[i]).getBytes(StandardCharsets.UTF_8).length;
-                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不能作为列类型");
+                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不支持作为列类型");
             };
         }
 
         ByteBuffer buf = ByteBuffer.allocate(size);
 
-        // 写null位图
+        // 写 null 位图
         byte[] nullBitmap = new byte[bitmapBytes];
         for (int i = 0; i < values.length; i++) {
             if (values[i] == null) {
-                nullBitmap[i / 8] |= (byte) (1 << (i % 8));
+                nullBitmap[i / 8] |= (1 << (i % 8));
             }
         }
         buf.put(nullBitmap);
@@ -65,7 +70,7 @@ public final class RowEncoder {
                     buf.putShort((short) bytes.length);
                     buf.put(bytes);
                 }
-                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不能作为列类型");
+                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不支持作为列类型");
             }
         }
 
@@ -79,12 +84,13 @@ public final class RowEncoder {
      * @return 值数组，null表示该列为NULL
      */
     public static Object[] decode(List<ColumnDef> columns, byte[] data) {
+        int bitmapBytes = bitmapSize(columns.size());
         ByteBuffer buf = ByteBuffer.wrap(data);
 
-        // 读null位图
-        int bitmapBytes = (columns.size() + 7) / 8;
+        // 读 null 位图
         byte[] nullBitmap = new byte[bitmapBytes];
         buf.get(nullBitmap);
+
         Object[] values = new Object[columns.size()];
 
         // 读各列值
@@ -103,7 +109,7 @@ public final class RowEncoder {
                     buf.get(bytes);
                     yield new String(bytes, StandardCharsets.UTF_8);
                 }
-                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不能作为列类型");
+                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不支持作为列类型");
             };
         }
 

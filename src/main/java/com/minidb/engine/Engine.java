@@ -121,6 +121,10 @@ public class Engine {
             // 尝试插入当前最后一页
             int lastPageId = pageIds.get(pageIds.size() - 1);
             Page currentPage = pool.getPage(tableNameKey, lastPageId);
+            if (currentPage == null) {
+                throw new MiniDbException(MiniDbException.Phase.PLAN, null,
+                        "页不存在或已被缓冲池淘汰: " + tableNameKey + "#" + lastPageId);
+            }
             int slot = currentPage.insertRow(encoded);
 
             if (slot == -1) {

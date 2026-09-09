@@ -1,18 +1,23 @@
 package com.minidb.storage;
 
+/**
+ * 槽式页（内存版）：槽目录从头向后生长，行数据从页尾向前生长。
+ *
+ * <p>槽数保存在 Java 字段中，不占页内空间（与 MemoryPage 的 freeSpace 语义物理一致：
+ * 初始 == PAGE_SIZE，减量 == 行字节 + 槽目录项）；D3 磁盘化时页头（槽数）放文件层。
+ */
 public class SlottedPage implements Page {
     private final int pageId;
     private final byte[] data;
     private int slotCount;
     private int freeStart;
     private int freeEnd;
-    private static final int HEADER_SIZE = 4;
 
     public SlottedPage(int pageId) {
         this.pageId = pageId;
         this.data = new byte[PAGE_SIZE];
         this.slotCount = 0;
-        this.freeStart = HEADER_SIZE;
+        this.freeStart = 0;
         this.freeEnd = PAGE_SIZE;
     }
 
@@ -28,11 +33,7 @@ public class SlottedPage implements Page {
         }
 
         int rowSize = row.length;
-        int slotOffset = freeStart;
-
         int requiredSpace = rowSize + SLOT_ENTRY_SIZE;
-
-        // freeSpace 包含了 HEADER_SIZE 区域，所以实际可用空间要加上 HEADER_SIZE
         if (freeSpace() < requiredSpace) {
             return -1;
         }
@@ -40,11 +41,11 @@ public class SlottedPage implements Page {
         int rowStart = freeEnd - rowSize;
         System.arraycopy(row, 0, data, rowStart, rowSize);
 
-        writeShort(slotOffset, (short) rowStart);
-        writeShort(slotOffset + 2, (short) rowSize);
+        writeShort(freeStart, (short) rowStart);
+        writeShort(freeStart + 2, (short) rowSize);
 
         slotCount++;
-        freeStart = slotOffset + SLOT_ENTRY_SIZE;
+        freeStart += SLOT_ENTRY_SIZE;
         freeEnd = rowStart;
 
         return slotCount - 1;
@@ -56,7 +57,7 @@ public class SlottedPage implements Page {
             return null;
         }
 
-        int slotOffset = HEADER_SIZE + slot * SLOT_ENTRY_SIZE;
+        int slotOffset = slot * SLOT_ENTRY_SIZE;
         int rowOffset = readShort(slotOffset);
         int rowLength = readShort(slotOffset + 2);
 
@@ -69,22 +70,21 @@ public class SlottedPage implements Page {
         return row;
     }
 
+    /** 标记删除：槽目录项置无效（偏移 -1），readRow 之后返回 null，freeSpace 不变。 */
     @Override
     public void deleteRow(int slot) {
         if (slot < 0 || slot >= slotCount) {
             return;
         }
 
-        int slotOffset = HEADER_SIZE + slot * SLOT_ENTRY_SIZE;
+        int slotOffset = slot * SLOT_ENTRY_SIZE;
         writeShort(slotOffset, (short) -1);
         writeShort(slotOffset + 2, (short) 0);
     }
 
     @Override
     public int freeSpace() {
-        // freeSpace = freeEnd - freeStart + HEADER_SIZE
-        // 这样初始 freeSpace = 4096 - 4 + 4 = 4096
-        return freeEnd - freeStart + HEADER_SIZE;
+        return freeEnd - freeStart;
     }
 
     public int getSlotCount() {

@@ -243,6 +243,28 @@ class SemanticAnalyzerTest {
         assertEquals(p(1, 33), e.pos());
     }
 
+    @Test
+    void insertVarcharValueOverMaxLengthRejected() {
+        // name VARCHAR(50)，插入 51 字符 → 超长，pos 是值的 token 位置
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new InsertStmt("student",
+                        List.of(new ColumnRef(null, "name", p(1, 22))),
+                        List.of(List.of(new Literal("x".repeat(51), DataType.VARCHAR, p(1, 33)))),
+                        p(1, 13))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 33), e.pos());
+        assertTrue(e.getMessage().contains("超长"));
+    }
+
+    @Test
+    void insertVarcharValueAtMaxLengthPasses() throws Exception {
+        // 恰好 50 字符（UTF-8 50 字节）→ 通过
+        analyzer(studentCatalog()).analyze(new InsertStmt("student",
+                List.of(new ColumnRef(null, "name", p(1, 22))),
+                List.of(List.of(new Literal("x".repeat(50), DataType.VARCHAR, p(1, 33)))),
+                p(1, 13)));
+    }
+
     // ==================================================================
     // Select：表存在 / 列存在 / WHERE 布尔
     // ==================================================================

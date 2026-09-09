@@ -20,8 +20,6 @@ target/
 .settings
 .springBeans
 .sts4-cache
-/docs
-AGENTS.md
 .m2repo/
 ### NetBeans ###
 /nbproject/private/
@@ -38,3 +36,6 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+/docs
+AGENTS.md

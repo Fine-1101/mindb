@@ -43,12 +43,8 @@ class ParameterizedPageTest {
         byte[] row = new byte[100];
         page.insertRow(row);
 
-        int expectedDecrease;
-        if (page instanceof MemoryPage) {
-            expectedDecrease = 100;
-        } else {
-            expectedDecrease = 100 + Page.SLOT_ENTRY_SIZE;
-        }
+        // D2 拍板：freeSpace 统一公式 = PAGE_SIZE − Σ(行字节 + 槽目录项4B)，两实现对拍逐字节相等
+        int expectedDecrease = 100 + Page.SLOT_ENTRY_SIZE;
 
         assertEquals(initialFree - expectedDecrease, page.freeSpace(),
                 name + ": 空闲空间减少应该精确，期望减少 " + expectedDecrease);
@@ -77,6 +73,26 @@ class ParameterizedPageTest {
 
         // 验证已有数据完整
         assertNotNull(page.readRow(0), name + ": 第一行数据应该完整");
+    }
+
+    @ParameterizedTest(name = "{1}")
+    @MethodSource("pageImplementations")
+    void exactFitInsertDoesNotCorruptLastRow(Page page, String name) {
+        // 回归：恰好装满时不得超额装填（曾因 freeSpace 多算页头 4B 导致槽目录覆盖最后一行）
+        // 每行占 4B 数据 + 4B 槽目录项 = 8B，4096/8 = 512 行恰好装满
+        byte[][] rows = new byte[512][];
+        for (int i = 0; i < 512; i++) {
+            rows[i] = new byte[]{(byte) i, (byte) (i >> 8), (byte) (i >> 16), (byte) (i >> 24)};
+            int slot = page.insertRow(rows[i]);
+            assertEquals(i, slot, name + ": 槽号应该递增");
+        }
+
+        assertEquals(0, page.freeSpace(), name + ": 恰好装满后空闲空间应为 0");
+        assertEquals(-1, page.insertRow(new byte[4]), name + ": 满页后再插应返回 -1");
+
+        for (int i = 0; i < 512; i++) {
+            assertArrayEquals(rows[i], page.readRow(i), name + ": 第 " + i + " 行应该完整");
+        }
     }
 
     @ParameterizedTest(name = "{1}")

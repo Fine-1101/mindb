@@ -84,11 +84,9 @@ public class BufferPoolWithStrategy implements BufferPool {
 
         int victimId;
         synchronized (accessOrder) {
-            if (strategy == Strategy.LRU) {
-                victimId = accessOrder.remove(0);
-            } else {
-                victimId = accessOrder.remove(0);
-            }
+            // LRU：getPage 命中时把页移到队尾，队首=最久未访问；
+            // FIFO：命中不刷新，队首=最早进入缓冲池。淘汰逻辑统一取队首。
+            victimId = accessOrder.remove(0);
         }
 
         inBuffer.remove(victimId);

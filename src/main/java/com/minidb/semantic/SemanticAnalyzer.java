@@ -18,6 +18,7 @@ import com.minidb.common.DataType;
 import com.minidb.common.MiniDbException;
 import com.minidb.common.Position;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -59,7 +60,7 @@ public class SemanticAnalyzer {
     public DataType infer(Expression expr, String tableName) throws MiniDbException {
         return switch (expr) {
             case Literal lit -> lit.type();
-            case ColumnRef ref -> resolveColumnType(tableName, ref);
+            case ColumnRef ref -> resolveColumn(tableName, ref).type();
             case BinaryExpr b -> {
                 DataType lt = infer(b.left(), tableName);
                 DataType rt = infer(b.right(), tableName);
@@ -111,35 +112,43 @@ public class SemanticAnalyzer {
     private void checkInsert(InsertStmt s) throws MiniDbException {
         TableDef table = requireTable(s.tableName(), s.pos());
 
-        // 目标列类型：指定列按书写序对齐（(score, id) 按 score,id 检查，非表定义序）；
+        // 目标列：指定列按书写序对齐（(score, id) 按 score,id 检查，非表定义序）；
         // 未指定列 = 表定义序全列
-        List<DataType> targetTypes = new ArrayList<>();
+        List<ColumnDef> targetColumns = new ArrayList<>();
         if (s.columns() == null) {
-            for (ColumnDef col : table.columns()) {
-                targetTypes.add(col.type());
-            }
+            targetColumns.addAll(table.columns());
         } else {
             for (ColumnRef c : s.columns()) {
-                targetTypes.add(resolveColumnType(table.tableName(), c));
+                targetColumns.add(resolveColumn(table.tableName(), c));
             }
         }
 
         for (List<Expression> row : s.rows()) {
-            if (row.size() != targetTypes.size()) {
+            if (row.size() != targetColumns.size()) {
                 throw new MiniDbException(MiniDbException.Phase.SEMANTIC, s.pos(),
-                        "列数与值数不匹配: " + targetTypes.size() + " 列, " + row.size() + " 值");
+                        "列数与值数不匹配: " + targetColumns.size() + " 列, " + row.size() + " 值");
             }
             for (int i = 0; i < row.size(); i++) {
-                checkValue(row.get(i), targetTypes.get(i));
+                checkValue(row.get(i), targetColumns.get(i));
             }
         }
     }
 
-    /** INSERT 值类型匹配：INT←INT_LIT；FLOAT←INT_LIT/FLOAT_LIT（INT 提升）；VARCHAR←STRING。 */
-    private void checkValue(Expression value, DataType columnType) throws MiniDbException {
+    /** INSERT 值类型匹配：INT←INT_LIT；FLOAT←INT_LIT/FLOAT_LIT（INT 提升）；
+     *  VARCHAR←STRING 且 UTF-8 字节数 ≤ maxLength（超限会撑爆 RowEncoder 的 2B 长度）。 */
+    private void checkValue(Expression value, ColumnDef column) throws MiniDbException {
         if (!(value instanceof Literal lit)) {
             throw new MiniDbException(MiniDbException.Phase.SEMANTIC, value.pos(),
                     "INSERT 值必须是字面量");
+        }
+        DataType columnType = column.type();
+        if (columnType == DataType.VARCHAR && lit.type() == DataType.VARCHAR) {
+            int len = ((String) lit.value()).getBytes(StandardCharsets.UTF_8).length;
+            if (len > column.maxLength()) {
+                throw new MiniDbException(MiniDbException.Phase.SEMANTIC, lit.pos(),
+                        "VARCHAR 值超长: 列 " + column.name() + "(" + column.maxLength()
+                                + "), 实际 " + len + " 字节");
+            }
         }
         boolean ok = switch (columnType) {
             case INT -> lit.type() == DataType.INT;
@@ -161,7 +170,7 @@ public class SemanticAnalyzer {
         TableDef table = requireTable(s.tableName(), s.pos());
         if (s.columns() != null) {
             for (ColumnRef c : s.columns()) {
-                resolveColumnType(table.tableName(), c); // 纯存在性检查；SELECT * 的展开归 Planner
+                resolveColumn(table.tableName(), c); // 纯存在性检查；SELECT * 的展开归 Planner
             }
         }
         if (s.where() != null) {
@@ -193,14 +202,13 @@ public class SemanticAnalyzer {
                 new MiniDbException(MiniDbException.Phase.SEMANTIC, pos, "表不存在: " + name));
     }
 
-    /** 列引用检查（带列自己的位置）：限定名须等于当前表名（忽略大小写），列须存在；返回列类型。 */
-    private DataType resolveColumnType(String tableName, ColumnRef ref) throws MiniDbException {
+    /** 列引用检查（带列自己的位置）：限定名须等于当前表名（忽略大小写），列须存在。 */
+    private ColumnDef resolveColumn(String tableName, ColumnRef ref) throws MiniDbException {
         if (ref.table() != null && !ref.table().equalsIgnoreCase(tableName)) {
             throw new MiniDbException(MiniDbException.Phase.SEMANTIC, ref.pos(),
                     "未知表限定符: " + ref.table());
         }
         return catalog.findColumn(tableName, ref.column())
-                .map(ColumnDef::type)
                 .orElseThrow(() -> new MiniDbException(MiniDbException.Phase.SEMANTIC, ref.pos(),
                         "列不存在: " + ref.column()));
     }

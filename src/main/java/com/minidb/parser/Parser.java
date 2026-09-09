@@ -72,7 +72,7 @@ public class Parser {
                     TokenType.KW_SELECT, TokenType.KW_DELETE);
         }
         Statement stmt = parseStatement();
-        if (check(TokenType.SEMI)) {
+        while (check(TokenType.SEMI)) {
             advance();
         }
         if (!check(TokenType.EOF)) {
@@ -137,7 +137,7 @@ public class Parser {
     // ------------------------------------------------------------------
 
     private Statement parseCreateTable() throws MiniDbException {
-        Token start = expect(TokenType.KW_CREATE);
+        expect(TokenType.KW_CREATE);
         expect(TokenType.KW_TABLE);
         Token table = expect(TokenType.IDENT);
         expect(TokenType.LPAREN);
@@ -149,7 +149,8 @@ public class Parser {
             columns.add(parseColumnDef());
         }
         expect(TokenType.RPAREN, TokenType.COMMA);
-        return new CreateTableStmt(table.text(), columns, start.pos());
+        // 约定：stmt.pos 为表名 token 位置（语义错误"表已存在"定位到表名，非语句首）
+        return new CreateTableStmt(table.text(), columns, table.pos());
     }
 
     /** ident type，type 为 INT / FLOAT / VARCHAR(INT_LIT)。 */
@@ -175,7 +176,7 @@ public class Parser {
     // ------------------------------------------------------------------
 
     private Statement parseInsert() throws MiniDbException {
-        Token start = expect(TokenType.KW_INSERT);
+        expect(TokenType.KW_INSERT);
         expect(TokenType.KW_INTO);
         Token table = expect(TokenType.IDENT);
 
@@ -200,7 +201,8 @@ public class Parser {
             advance();
             rows.add(parseRow());
         }
-        return new InsertStmt(table.text(), columns, rows, start.pos());
+        // 约定：stmt.pos 为表名 token 位置
+        return new InsertStmt(table.text(), columns, rows, table.pos());
     }
 
     private List<Expression> parseRow() throws MiniDbException {
@@ -238,7 +240,7 @@ public class Parser {
     // ------------------------------------------------------------------
 
     private Statement parseSelect() throws MiniDbException {
-        Token start = expect(TokenType.KW_SELECT);
+        expect(TokenType.KW_SELECT);
 
         List<ColumnRef> columns = null;
         if (check(TokenType.STAR)) {
@@ -262,7 +264,8 @@ public class Parser {
             advance();
             where = parseExpression();
         }
-        return new SelectStmt(columns, table.text(), where, start.pos());
+        // 约定：stmt.pos 为表名 token 位置
+        return new SelectStmt(columns, table.text(), where, table.pos());
     }
 
     // ------------------------------------------------------------------
@@ -270,7 +273,7 @@ public class Parser {
     // ------------------------------------------------------------------
 
     private Statement parseDelete() throws MiniDbException {
-        Token start = expect(TokenType.KW_DELETE);
+        expect(TokenType.KW_DELETE);
         expect(TokenType.KW_FROM);
         Token table = expect(TokenType.IDENT);
 
@@ -279,7 +282,8 @@ public class Parser {
             advance();
             where = parseExpression();
         }
-        return new DeleteStmt(table.text(), where, start.pos());
+        // 约定：stmt.pos 为表名 token 位置
+        return new DeleteStmt(table.text(), where, table.pos());
     }
 
     // ==================================================================

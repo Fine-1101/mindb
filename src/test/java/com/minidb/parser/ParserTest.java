@@ -149,7 +149,7 @@ class ParserTest {
                         new ColumnDef("id", DataType.INT, 0),
                         new ColumnDef("name", DataType.VARCHAR, 32),
                         new ColumnDef("score", DataType.FLOAT, 0)),
-                p(ts, 0)), stmt);
+                p(ts, 2)), stmt);
     }
 
     @Test
@@ -198,7 +198,8 @@ class ParserTest {
         assertEquals(new Literal(1, DataType.INT, p(ts, 5)), row.get(0));
         assertEquals(new Literal("Tom's book", DataType.VARCHAR, p(ts, 7)), row.get(1));
         assertEquals(new Literal(3.14, DataType.FLOAT, p(ts, 9)), row.get(2));
-        assertEquals(p(ts, 0), stmt.pos());
+        // stmt.pos 约定为表名 token 位置（token 2 = users），非语句首
+        assertEquals(p(ts, 2), stmt.pos());
     }
 
     @Test
@@ -243,7 +244,8 @@ class ParserTest {
         assertNull(stmt.columns());
         assertEquals("student", stmt.tableName());
         assertNull(stmt.where());
-        assertEquals(p(ts, 0), stmt.pos());
+        // stmt.pos 约定为表名 token 位置（token 3 = student），非语句首
+        assertEquals(p(ts, 3), stmt.pos());
     }
 
     @Test
@@ -277,7 +279,7 @@ class ParserTest {
         String sql = "DELETE FROM users;";
         List<Token> ts = lex(sql);
         DeleteStmt stmt = (DeleteStmt) parse(sql);
-        assertEquals(new DeleteStmt("users", null, p(ts, 0)), stmt);
+        assertEquals(new DeleteStmt("users", null, p(ts, 2)), stmt);
     }
 
     @Test

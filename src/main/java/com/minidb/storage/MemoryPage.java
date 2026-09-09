@@ -10,12 +10,14 @@ public class MemoryPage implements Page {
     private int usedSpace;
     private int nextSlot;
     private static final int MAX_SLOTS = 1024;
+    private boolean dirty;
 
     public MemoryPage(int pageId) {
         this.pageId = pageId;
         this.slots = new byte[MAX_SLOTS][];
         this.usedSpace = 0;
         this.nextSlot = 0;
+        this.dirty = false;
     }
 
     @Override
@@ -40,6 +42,7 @@ public class MemoryPage implements Page {
 
         slots[nextSlot] = Arrays.copyOf(row, row.length);
         usedSpace += rowSize;
+        dirty = true;
         return nextSlot++;
     }
 
@@ -61,14 +64,29 @@ public class MemoryPage implements Page {
             return;
         }
         if (slots[slot] != null) {
-            // 标记删除，不回收空间（freeSpace 不变）
             slots[slot] = null;
+            dirty = true;
         }
     }
 
     @Override
     public int freeSpace() {
         return PAGE_SIZE - usedSpace;
+    }
+
+    @Override
+    public boolean isDirty() {
+        return dirty;
+    }
+
+    @Override
+    public void markClean() {
+        this.dirty = false;
+    }
+
+    @Override
+    public void markDirty() {
+        this.dirty = true;
     }
 
     public int getUsedSpace() {

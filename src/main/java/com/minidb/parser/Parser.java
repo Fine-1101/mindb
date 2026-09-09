@@ -41,15 +41,30 @@ import java.util.Set;
  *  &lt; 原子（字面量 / 列引用 / 括号）
  * </pre>
  *
- * <p>所有语法错误统一抛出 MiniDbException(Phase.PARSER, 出错Token.pos, message)，
- * message 含 unexpected token 与 non-empty expected 集合。不做语义检查、不做错误恢复。
+ * <p>错误诊断：语法错误抛出 MiniDbException(Phase.PARSER, 出错Token.pos, message)。
+ * message 包含 unexpected token 原文（如 FROM (KW_FROM)）、行列号与可读的 expected 集合
+ * （如 [INT / FLOAT / VARCHAR]、[* / identifier]）。
+ *
+ * <p>parseScript 具备单条语句错误恢复：坏语句记录错误后跳到下一个 ';' 继续解析后续语句；
+ * 若存在错误，最终抛第一条错误的 MiniDbException，且 message 汇总全部错误位置。
+ * 公共 API（parse / parseScript 签名）保持不变。
  */
 public class Parser {
 
     private static final Position SYNTHETIC_EOF_POS = new Position(1, 1);
 
+    /** 单条已记录的语法错误：位置 + 完整诊断文本。 */
+    private record ParseIssue(Position pos, String message) {
+    }
+
     private List<Token> tokens;
     private int index;
+
+    /** 最近一次 parseScript 中成功解析出的语句（即使最终因错误抛异常也保留，供测试取证）。 */
+    private List<Statement> recoveredStatements = List.of();
+
+    /** 最近一次 parseScript 记录到的全部错误。 */
+    private List<ParseIssue> recordedIssues = List.of();
 
     // ==================================================================
     // 公共 API
@@ -84,13 +99,19 @@ public class Parser {
     /**
      * 解析多条以 ; 分隔的语句；空语句（;;）、纯注释输入返回空列表。
      *
+     * <p>错误恢复语义：某条语句语法错误时，记录该错误并跳到下一个 ';'，
+     * 从下一条语句继续解析，尽量保留后面合法的语句。若整个脚本存在错误，
+     * 最终抛出第一条错误的 MiniDbException（pos 指向第一处出错 Token），
+     * 且 message 汇总脚本中发现的全部错误位置清单。
+     *
      * @param tokens Lexer 输出
-     * @return 语句 AST 列表（保持源码顺序）
-     * @throws MiniDbException 某条语句语法错误（position 指向该语句出错 Token）
+     * @return 语句 AST 列表（保持源码顺序；无错误时）
+     * @throws MiniDbException 脚本中存在语法错误（phase = PARSER）
      */
     public List<Statement> parseScript(List<Token> tokens) throws MiniDbException {
         init(tokens);
         List<Statement> statements = new ArrayList<>();
+        List<ParseIssue> issues = new ArrayList<>();
         while (true) {
             // 跳过空语句（;; 以及开头/结尾多余的 ;）
             while (check(TokenType.SEMI)) {
@@ -99,17 +120,78 @@ public class Parser {
             if (check(TokenType.EOF)) {
                 break;
             }
-            Statement stmt = parseStatement();
-            statements.add(stmt);
+            try {
+                Statement stmt = parseStatement();
+                statements.add(stmt);
+            } catch (MiniDbException e) {
+                // 记录错误 -> 跳到下一个 ';' -> 继续解析后续语句
+                issues.add(new ParseIssue(e.pos(), e.getMessage()));
+                synchronize();
+                continue;
+            }
             if (check(TokenType.EOF)) {
                 break;
             }
             if (!check(TokenType.SEMI)) {
-                throw error(peek(), TokenType.SEMI);
+                // 语句之间缺少分号
+                MiniDbException e = error(peek(), TokenType.SEMI);
+                issues.add(new ParseIssue(e.pos(), e.getMessage()));
+                synchronize();
+                continue;
             }
-            advance();
+            advance(); // 消费 ';'
+        }
+        this.recoveredStatements = List.copyOf(statements);
+        this.recordedIssues = List.copyOf(issues);
+        if (!issues.isEmpty()) {
+            throw aggregatedException(issues);
         }
         return statements;
+    }
+
+    /**
+     * 最近一次 parseScript 成功解析出的语句（即使最终抛异常也保留）。
+     * 仅包内测试取证使用，不属于公共 API。
+     */
+    List<Statement> recoveredStatements() {
+        return recoveredStatements;
+    }
+
+    /** 最近一次 parseScript 记录到的错误个数。仅包内测试取证使用。 */
+    int recordedIssueCount() {
+        return recordedIssues.size();
+    }
+
+    // ==================================================================
+    // 错误恢复
+    // ==================================================================
+
+    /**
+     * 把解析位置推进到下一个语句边界：跳过当前 Token 直到 ';'（含），
+     * 到 EOF 则停止。保证每次错误恢复都推进 token index，避免死循环。
+     */
+    private void synchronize() {
+        while (!check(TokenType.EOF) && !check(TokenType.SEMI)) {
+            advance();
+        }
+        if (check(TokenType.SEMI)) {
+            advance();
+        }
+    }
+
+    /** 汇总全部错误：异常 pos 取第一条错误，message 列出每条错误的位置与内容。 */
+    private MiniDbException aggregatedException(List<ParseIssue> issues) {
+        ParseIssue first = issues.get(0);
+        StringBuilder msg = new StringBuilder("解析脚本时发现 ")
+                .append(issues.size()).append(" 处语法错误（已尝试恢复并继续解析）:");
+        for (int i = 0; i < issues.size(); i++) {
+            ParseIssue issue = issues.get(i);
+            msg.append("\n  错误 ").append(i + 1).append(" @ ").append(issue.pos())
+                    .append(" (line ").append(issue.pos().line())
+                    .append(", column ").append(issue.pos().col())
+                    .append("): ").append(issue.message());
+        }
+        return new MiniDbException(MiniDbException.Phase.PARSER, first.pos(), msg.toString());
     }
 
     // ==================================================================
@@ -246,6 +328,10 @@ public class Parser {
         if (check(TokenType.STAR)) {
             advance(); // SELECT *：columns == null
         } else {
+            if (!check(TokenType.IDENT)) {
+                // 诊断：明确提示这里期待 * 或列名（例如 SELECT FROM t）
+                throw error(peek(), TokenType.STAR, TokenType.IDENT);
+            }
             columns = new ArrayList<>();
             Token col = expect(TokenType.IDENT);
             columns.add(new ColumnRef(null, col.text(), col.pos()));
@@ -404,6 +490,8 @@ public class Parser {
             this.tokens = input;
         }
         this.index = 0;
+        this.recoveredStatements = List.of();
+        this.recordedIssues = List.of();
     }
 
     private Token peek() {
@@ -480,21 +568,78 @@ public class Parser {
         }
     }
 
+    // ==================================================================
+    // 错误诊断
+    // ==================================================================
+
+    /**
+     * 构造 PARSER 错误：unexpected token（含原文与类型）、行列号、可读 expected 集合。
+     * 例如：unexpected token FROM (KW_FROM) at line 1, column 8, expected [* / identifier]
+     */
     private MiniDbException error(Token unexpected, TokenType... expected) {
         Set<TokenType> expectedSet = new LinkedHashSet<>(List.of(expected));
         StringBuilder sb = new StringBuilder();
         sb.append("unexpected token ").append(describeToken(unexpected));
-        sb.append(", expected ").append(expectedSet);
+        sb.append(" at line ").append(unexpected.pos().line())
+                .append(", column ").append(unexpected.pos().col());
+        sb.append(", expected ").append(formatExpected(expectedSet));
         return new MiniDbException(MiniDbException.Phase.PARSER, unexpected.pos(), sb.toString());
     }
 
+    /** 展示 unexpected Token：优先输出原文，并附 TokenType，如 FROM (KW_FROM)、t (IDENT)。 */
     private String describeToken(Token t) {
         if (t.type() == TokenType.EOF) {
-            return "EOF";
+            return "end of input (EOF)";
         }
         if (t.text() == null || t.text().isEmpty()) {
             return t.type().name();
         }
-        return t.type().name() + " '" + t.text() + "'";
+        return t.text() + " (" + t.type().name() + ")";
+    }
+
+    /** expected 集合的可读展示，如 [INT / FLOAT / VARCHAR]、[* / identifier]。 */
+    private String formatExpected(Set<TokenType> expected) {
+        StringBuilder sb = new StringBuilder("[");
+        int i = 0;
+        for (TokenType type : expected) {
+            if (i++ > 0) {
+                sb.append(" / ");
+            }
+            sb.append(friendlyName(type));
+        }
+        sb.append(']');
+        return sb.toString();
+    }
+
+    /** 把 TokenType 翻译为用户可读名称：关键字大写、符号原样、其余给语义名称。 */
+    private String friendlyName(TokenType type) {
+        switch (type) {
+            case IDENT: return "identifier";
+            case INT_LIT: return "integer literal";
+            case FLOAT_LIT: return "float literal";
+            case STRING: return "string literal";
+            case EOF: return "end of input";
+            case STAR: return "*";
+            case LPAREN: return "(";
+            case RPAREN: return ")";
+            case COMMA: return ",";
+            case SEMI: return ";";
+            case DOT: return ".";
+            case OP_LT: return "<";
+            case OP_LE: return "<=";
+            case OP_GT: return ">";
+            case OP_GE: return ">=";
+            case OP_EQ: return "=";
+            case OP_EQEQ: return "==";
+            case OP_NE: return "!=";
+            case OP_ADD: return "+";
+            case OP_SUB: return "-";
+            case OP_DIV: return "/";
+            default:
+                if (type.name().startsWith("KW_")) {
+                    return type.name().substring("KW_".length());
+                }
+                return type.name();
+        }
     }
 }

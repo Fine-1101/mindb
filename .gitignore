@@ -22,6 +22,7 @@ target/
 .sts4-cache
 /docs
 AGENTS.md
+.m2repo/
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/

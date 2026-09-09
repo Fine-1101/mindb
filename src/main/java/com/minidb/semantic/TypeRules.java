@@ -11,6 +11,7 @@ public final class TypeRules {
 
     private TypeRules() {}
 
+    //二维表
     private static final Map<DataType, Map<DataType, DataType>> ARITHMETIC = Map.of(
         DataType.INT, Map.of(
             DataType.INT, DataType.INT,

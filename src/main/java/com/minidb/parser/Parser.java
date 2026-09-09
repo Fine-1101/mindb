@@ -179,14 +179,16 @@ public class Parser {
         expect(TokenType.KW_INTO);
         Token table = expect(TokenType.IDENT);
 
-        List<String> columns = null;
+        List<ColumnRef> columns = null;
         if (check(TokenType.LPAREN)) {
             advance();
             columns = new ArrayList<>();
-            columns.add(expect(TokenType.IDENT).text());
+            Token col = expect(TokenType.IDENT);
+            columns.add(new ColumnRef(null, col.text(), col.pos()));
             while (check(TokenType.COMMA)) {
                 advance();
-                columns.add(expect(TokenType.IDENT).text());
+                col = expect(TokenType.IDENT);
+                columns.add(new ColumnRef(null, col.text(), col.pos()));
             }
             expect(TokenType.RPAREN, TokenType.COMMA);
         }
@@ -238,15 +240,17 @@ public class Parser {
     private Statement parseSelect() throws MiniDbException {
         Token start = expect(TokenType.KW_SELECT);
 
-        List<String> columns = null;
+        List<ColumnRef> columns = null;
         if (check(TokenType.STAR)) {
             advance(); // SELECT *：columns == null
         } else {
             columns = new ArrayList<>();
-            columns.add(expect(TokenType.IDENT).text());
+            Token col = expect(TokenType.IDENT);
+            columns.add(new ColumnRef(null, col.text(), col.pos()));
             while (check(TokenType.COMMA)) {
                 advance();
-                columns.add(expect(TokenType.IDENT).text());
+                col = expect(TokenType.IDENT);
+                columns.add(new ColumnRef(null, col.text(), col.pos()));
             }
         }
 

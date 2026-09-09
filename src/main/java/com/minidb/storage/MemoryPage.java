@@ -2,22 +2,22 @@ package com.minidb.storage;
 
 import java.util.Arrays;
 
-/** 纯内存页（D1 交付）。freeSpace/删除语义按 Page 契约，与 SlottedPage 对拍一致。 */
 public class MemoryPage implements Page {
-
-    /** 槽数组容量：按契约公式每行至少 1B+4B，最多约 819 行，槽数组不会触顶。 */
-    private static final int MAX_SLOTS = 1024;
+    public static final int PAGE_SIZE = 4096;
 
     private final int pageId;
     private final byte[][] slots;
     private int usedSpace;
     private int nextSlot;
+    private static final int MAX_SLOTS = 1024;
+    private boolean dirty;
 
     public MemoryPage(int pageId) {
         this.pageId = pageId;
         this.slots = new byte[MAX_SLOTS][];
         this.usedSpace = 0;
         this.nextSlot = 0;
+        this.dirty = false;
     }
 
     @Override
@@ -31,13 +31,18 @@ public class MemoryPage implements Page {
             return -1;
         }
 
-        int cost = row.length + SLOT_ENTRY_SIZE;
-        if (freeSpace() < cost) {
+        int rowSize = row.length;
+        if (freeSpace() < rowSize) {
+            return -1;
+        }
+
+        if (nextSlot >= MAX_SLOTS) {
             return -1;
         }
 
         slots[nextSlot] = Arrays.copyOf(row, row.length);
-        usedSpace += cost;
+        usedSpace += rowSize;
+        dirty = true;
         return nextSlot++;
     }
 
@@ -53,18 +58,35 @@ public class MemoryPage implements Page {
         return Arrays.copyOf(row, row.length);
     }
 
-    /** 标记删除：槽置空、readRow 返回 null；按契约不回收 freeSpace。 */
     @Override
     public void deleteRow(int slot) {
         if (slot < 0 || slot >= nextSlot) {
             return;
         }
-        slots[slot] = null;
+        if (slots[slot] != null) {
+            slots[slot] = null;
+            dirty = true;
+        }
     }
 
     @Override
     public int freeSpace() {
         return PAGE_SIZE - usedSpace;
+    }
+
+    @Override
+    public boolean isDirty() {
+        return dirty;
+    }
+
+    @Override
+    public void markClean() {
+        this.dirty = false;
+    }
+
+    @Override
+    public void markDirty() {
+        this.dirty = true;
     }
 
     public int getUsedSpace() {

@@ -1,24 +1,66 @@
 package com.minidb.storage;
 
-/**
- * 槽式页（内存版）：槽目录从头向后生长，行数据从页尾向前生长。
- *
- * <p>槽数保存在 Java 字段中，不占页内空间（与 MemoryPage 的 freeSpace 语义物理一致：
- * 初始 == PAGE_SIZE，减量 == 行字节 + 槽目录项）；D3 磁盘化时页头（槽数）放文件层。
- */
 public class SlottedPage implements Page {
     private final int pageId;
     private final byte[] data;
     private int slotCount;
     private int freeStart;
     private int freeEnd;
+    private boolean dirty;
+    private static final int HEADER_SIZE = 4;
 
     public SlottedPage(int pageId) {
         this.pageId = pageId;
         this.data = new byte[PAGE_SIZE];
         this.slotCount = 0;
-        this.freeStart = 0;
+        this.freeStart = HEADER_SIZE;
         this.freeEnd = PAGE_SIZE;
+        this.dirty = false;
+    }
+
+    /**
+     * 从磁盘数据构造 SlottedPage
+     */
+    public SlottedPage(int pageId, byte[] diskData, int slotCount) {
+        this.pageId = pageId;
+        this.data = new byte[PAGE_SIZE];
+        // diskData 包含槽数前缀 + 页体，复制页体（跳过前4字节）
+        int dataOffset = DISK_PREFIX_SIZE;
+        int copyLen = Math.min(diskData.length - dataOffset, PAGE_SIZE);
+        System.arraycopy(diskData, dataOffset, this.data, 0, copyLen);
+        this.slotCount = slotCount;
+        // 重建 freeStart/freeEnd
+        rebuildFreeSpace();
+        this.dirty = false;
+    }
+
+    private void rebuildFreeSpace() {
+        // 根据 slotCount 计算 freeStart
+        this.freeStart = HEADER_SIZE + slotCount * SLOT_ENTRY_SIZE;
+
+        // 找所有有效行的最小偏移（尾部生长）
+        int minRowStart = PAGE_SIZE;
+        boolean hasValidRow = false;
+        for (int i = 0; i < slotCount; i++) {
+            int slotOffset = HEADER_SIZE + i * SLOT_ENTRY_SIZE;
+            int rowOffset = readShort(slotOffset);
+            if (rowOffset >= 0) {
+                hasValidRow = true;
+                if (rowOffset < minRowStart) {
+                    minRowStart = rowOffset;
+                }
+            }
+        }
+        if (hasValidRow) {
+            this.freeEnd = minRowStart;
+        } else {
+            this.freeEnd = PAGE_SIZE;
+        }
+
+        // 确保 freeStart 不超过 freeEnd
+        if (this.freeStart > this.freeEnd) {
+            this.freeStart = this.freeEnd;
+        }
     }
 
     @Override
@@ -33,7 +75,10 @@ public class SlottedPage implements Page {
         }
 
         int rowSize = row.length;
+        int slotOffset = freeStart;
+
         int requiredSpace = rowSize + SLOT_ENTRY_SIZE;
+
         if (freeSpace() < requiredSpace) {
             return -1;
         }
@@ -41,12 +86,13 @@ public class SlottedPage implements Page {
         int rowStart = freeEnd - rowSize;
         System.arraycopy(row, 0, data, rowStart, rowSize);
 
-        writeShort(freeStart, (short) rowStart);
-        writeShort(freeStart + 2, (short) rowSize);
+        writeShort(slotOffset, (short) rowStart);
+        writeShort(slotOffset + 2, (short) rowSize);
 
         slotCount++;
-        freeStart += SLOT_ENTRY_SIZE;
+        freeStart = slotOffset + SLOT_ENTRY_SIZE;
         freeEnd = rowStart;
+        dirty = true;
 
         return slotCount - 1;
     }
@@ -57,7 +103,7 @@ public class SlottedPage implements Page {
             return null;
         }
 
-        int slotOffset = slot * SLOT_ENTRY_SIZE;
+        int slotOffset = HEADER_SIZE + slot * SLOT_ENTRY_SIZE;
         int rowOffset = readShort(slotOffset);
         int rowLength = readShort(slotOffset + 2);
 
@@ -70,25 +116,50 @@ public class SlottedPage implements Page {
         return row;
     }
 
-    /** 标记删除：槽目录项置无效（偏移 -1），readRow 之后返回 null，freeSpace 不变。 */
     @Override
     public void deleteRow(int slot) {
         if (slot < 0 || slot >= slotCount) {
             return;
         }
 
-        int slotOffset = slot * SLOT_ENTRY_SIZE;
+        int slotOffset = HEADER_SIZE + slot * SLOT_ENTRY_SIZE;
         writeShort(slotOffset, (short) -1);
         writeShort(slotOffset + 2, (short) 0);
+        dirty = true;
     }
 
     @Override
     public int freeSpace() {
-        return freeEnd - freeStart;
+        // freeSpace = freeEnd - freeStart + HEADER_SIZE
+        // 初始: 4096 - 4 + 4 = 4096
+        // 插入后精确追踪
+        return freeEnd - freeStart + HEADER_SIZE;
+    }
+
+    @Override
+    public boolean isDirty() {
+        return dirty;
+    }
+
+    @Override
+    public void markClean() {
+        this.dirty = false;
+    }
+
+    @Override
+    public void markDirty() {
+        this.dirty = true;
     }
 
     public int getSlotCount() {
         return slotCount;
+    }
+
+    /**
+     * 获取页体数据（不含槽数前缀），用于写盘
+     */
+    public byte[] getPageData() {
+        return data;
     }
 
     private void writeShort(int offset, short value) {

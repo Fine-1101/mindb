@@ -7,13 +7,13 @@ public class SlottedPage implements Page {
     private int freeStart;
     private int freeEnd;
     private boolean dirty;
-    private static final int HEADER_SIZE = 4;
 
     public SlottedPage(int pageId) {
         this.pageId = pageId;
         this.data = new byte[PAGE_SIZE];
         this.slotCount = 0;
-        this.freeStart = HEADER_SIZE;
+        // 槽数存磁盘前缀（DISK_PREFIX_SIZE），不占页体；槽目录从页体偏移 0 开始
+        this.freeStart = 0;
         this.freeEnd = PAGE_SIZE;
         this.dirty = false;
     }
@@ -36,13 +36,13 @@ public class SlottedPage implements Page {
 
     private void rebuildFreeSpace() {
         // 根据 slotCount 计算 freeStart
-        this.freeStart = HEADER_SIZE + slotCount * SLOT_ENTRY_SIZE;
+        this.freeStart = slotCount * SLOT_ENTRY_SIZE;
 
         // 找所有有效行的最小偏移（尾部生长）
         int minRowStart = PAGE_SIZE;
         boolean hasValidRow = false;
         for (int i = 0; i < slotCount; i++) {
-            int slotOffset = HEADER_SIZE + i * SLOT_ENTRY_SIZE;
+            int slotOffset = i * SLOT_ENTRY_SIZE;
             int rowOffset = readShort(slotOffset);
             if (rowOffset >= 0) {
                 hasValidRow = true;
@@ -103,7 +103,7 @@ public class SlottedPage implements Page {
             return null;
         }
 
-        int slotOffset = HEADER_SIZE + slot * SLOT_ENTRY_SIZE;
+        int slotOffset = slot * SLOT_ENTRY_SIZE;
         int rowOffset = readShort(slotOffset);
         int rowLength = readShort(slotOffset + 2);
 
@@ -122,7 +122,7 @@ public class SlottedPage implements Page {
             return;
         }
 
-        int slotOffset = HEADER_SIZE + slot * SLOT_ENTRY_SIZE;
+        int slotOffset = slot * SLOT_ENTRY_SIZE;
         writeShort(slotOffset, (short) -1);
         writeShort(slotOffset + 2, (short) 0);
         dirty = true;
@@ -130,10 +130,8 @@ public class SlottedPage implements Page {
 
     @Override
     public int freeSpace() {
-        // freeSpace = freeEnd - freeStart + HEADER_SIZE
-        // 初始: 4096 - 4 + 4 = 4096
-        // 插入后精确追踪
-        return freeEnd - freeStart + HEADER_SIZE;
+        // D2 拍板：freeSpace = PAGE_SIZE − Σ(行字节 + 槽目录项4B)，页头不计（槽数存磁盘前缀）
+        return freeEnd - freeStart;
     }
 
     @Override

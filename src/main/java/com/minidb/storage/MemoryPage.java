@@ -41,7 +41,7 @@ public class MemoryPage implements Page {
         }
 
         slots[nextSlot] = Arrays.copyOf(row, row.length);
-        usedSpace += rowSize;
+        usedSpace += rowSize + SLOT_ENTRY_SIZE;
         dirty = true;
         return nextSlot++;
     }

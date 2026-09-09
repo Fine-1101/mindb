@@ -48,7 +48,14 @@ public class InMemoryBufferPool implements BufferPool {
 
     @Override
     public void flushAll() {
-        // 纯内存实现，无需 flush
+        // 纯内存实现：仅脏页“写盘”（标记干净），无实际磁盘 I/O
+        for (Map<Integer, Page> pages : tablePages.values()) {
+            for (Page page : pages.values()) {
+                if (page.isDirty()) {
+                    page.clearDirty();
+                }
+            }
+        }
     }
 
     @Override

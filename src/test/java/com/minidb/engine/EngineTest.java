@@ -165,27 +165,34 @@ class EngineTest {
     }
 
     // ============================================================
-    // DeletePlan 占位：execute 抛"未实现"
+    // DeletePlan 执行：无 WHERE 全删
     // ============================================================
 
     @Test
-    void testDeletePlanThrowsNotImplemented() {
+    void testDeletePlanExecutes() throws MiniDbException {
         Catalog catalog = new MemoryCatalog();
         BufferPool pool = new InMemoryBufferPool();
         Engine engine = new Engine(catalog, pool);
 
-        DeletePlan deletePlan = new DeletePlan("t1", null);
+        // 建表 + 插入 3 行
+        engine.execute(new CreateTablePlan(
+                new TableDef("t1", List.of(
+                        new ColumnDef("id", DataType.INT, 0)))));
+        engine.execute(new InsertPlan("t1", List.of("id"), List.of(
+                List.of(new com.minidb.ast.Literal(1, DataType.INT, null)),
+                List.of(new com.minidb.ast.Literal(2, DataType.INT, null)),
+                List.of(new com.minidb.ast.Literal(3, DataType.INT, null))
+        )));
 
-        MiniDbException ex = assertThrows(MiniDbException.class,
-                () -> engine.execute(deletePlan),
-                "DeletePlan 应抛异常而非静默忽略");
+        // DELETE FROM t1（无 WHERE → 全删）
+        engine.execute(new DeletePlan("t1", null));
 
-        // 验证阶段为 PLAN
-        assertEquals(MiniDbException.Phase.PLAN, ex.phase(),
-                "异常阶段应为 PLAN");
-        // 验证错误消息含"未实现"
-        assertTrue(ex.getMessage().contains("未实现"),
-                "错误消息应包含'未实现'");
+        // 验证：扫描结果应为空
+        List<ColumnDef> cols = List.of(new ColumnDef("id", DataType.INT, 0));
+        List<Integer> pageIds = engine.getTablePageIds("t1");
+        Page page = pool.getPage("t1", pageIds.get(0));
+        com.minidb.storage.MemoryPage mp = (com.minidb.storage.MemoryPage) page;
+        assertEquals(0, mp.getRowCount(), "全删后应无存活行");
     }
 
     // ============================================================

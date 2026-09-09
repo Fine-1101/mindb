@@ -38,6 +38,7 @@ public final class RowEncoder {
                 case INT -> 4;
                 case FLOAT -> 8;
                 case VARCHAR -> 2 + ((String) values[i]).getBytes(StandardCharsets.UTF_8).length;
+                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不能作为列类型");
             };
         }
 
@@ -64,6 +65,7 @@ public final class RowEncoder {
                     buf.putShort((short) bytes.length);
                     buf.put(bytes);
                 }
+                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不能作为列类型");
             }
         }
 
@@ -101,6 +103,7 @@ public final class RowEncoder {
                     buf.get(bytes);
                     yield new String(bytes, StandardCharsets.UTF_8);
                 }
+                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不能作为列类型");
             };
         }
 

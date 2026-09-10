@@ -4,6 +4,7 @@ import com.minidb.ast.BinaryExpr;
 import com.minidb.ast.BinaryOp;
 import com.minidb.ast.ColumnRef;
 import com.minidb.ast.Expression;
+import com.minidb.ast.FuncCall;
 import com.minidb.ast.Literal;
 import com.minidb.ast.UnaryExpr;
 import com.minidb.ast.UnaryOp;
@@ -48,6 +49,10 @@ public final class ExpressionEvaluator {
             }
             case BinaryExpr b -> evaluateBinary(b, columns, row);
             case UnaryExpr u -> evaluateUnary(u, columns, row);
+            // D4-A 编译契约适配：FuncCall 已进入 Expression permits。
+            // 聚合执行（AggregateExecutor）属于 D 的 D4 任务，这里只给最小占位分支。
+            case FuncCall f -> throw new MiniDbException(MiniDbException.Phase.PLAN, f.pos(),
+                    "聚合函数执行尚未支持: " + f.func());
         };
     }
 

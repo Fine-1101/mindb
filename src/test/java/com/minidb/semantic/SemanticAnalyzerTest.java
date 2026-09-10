@@ -273,7 +273,7 @@ class SemanticAnalyzerTest {
     void selectWithColumnsAndWherePasses() throws Exception {
         // SELECT id, name FROM student WHERE score >= 90.0
         analyzer(studentCatalog()).analyze(new SelectStmt(
-                List.of(new ColumnRef(null, "id", p(1, 8)),
+                List.<Expression>of(new ColumnRef(null, "id", p(1, 8)),
                         new ColumnRef(null, "name", p(1, 12))),
                 "student",
                 new BinaryExpr(new ColumnRef(null, "score", p(1, 32)), BinaryOp.GE,
@@ -304,7 +304,7 @@ class SemanticAnalyzerTest {
         // SELECT naem FROM student —— pos 是 naem 的位置(1,8)
         MiniDbException e = assertThrows(MiniDbException.class, () ->
                 analyzer(studentCatalog()).analyze(new SelectStmt(
-                        List.of(new ColumnRef(null, "naem", p(1, 8))),
+                        List.<Expression>of(new ColumnRef(null, "naem", p(1, 8))),
                         "student", null, p(1, 18))));
         assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
         assertEquals(p(1, 8), e.pos());

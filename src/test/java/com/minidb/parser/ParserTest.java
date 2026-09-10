@@ -252,7 +252,8 @@ class ParserTest {
     void selectColumnListWithWhere() throws Exception {
         String sql = "SELECT id, name FROM student WHERE score >= 90.0;";
         SelectStmt stmt = (SelectStmt) parse(sql);
-        assertEquals(List.of("id", "name"), stmt.columns().stream().map(ColumnRef::column).toList());
+        assertEquals(List.of("id", "name"), stmt.columns().stream()
+                .map(e -> ((ColumnRef) e).column()).toList());
         assertEquals("student", stmt.tableName());
         // WHERE score >= 90.0
         assertEquals(BinaryOp.GE, ((BinaryExpr) stmt.where()).op());
@@ -493,7 +494,8 @@ class ParserTest {
 
         // 列名保留原始拼写
         SelectStmt withCol = (SelectStmt) parse("SELECT ID FROM Student;");
-        assertEquals(List.of("ID"), withCol.columns().stream().map(ColumnRef::column).toList());
+        assertEquals(List.of("ID"), withCol.columns().stream()
+                .map(e -> ((ColumnRef) e).column()).toList());
         assertEquals("Student", withCol.tableName());
     }
 
@@ -559,7 +561,8 @@ class ParserTest {
     void veryLongIdentifier() throws Exception {
         String longCol = "a" + "x".repeat(1000);
         SelectStmt stmt = (SelectStmt) parse("SELECT " + longCol + " FROM t;");
-        assertEquals(List.of(longCol), stmt.columns().stream().map(ColumnRef::column).toList());
+        assertEquals(List.of(longCol), stmt.columns().stream()
+                .map(e -> ((ColumnRef) e).column()).toList());
 
         CreateTableStmt create = (CreateTableStmt) parse(
                 "CREATE TABLE " + longCol + " (id INT);");

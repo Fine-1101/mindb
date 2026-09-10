@@ -22,8 +22,14 @@ public class DiskBufferPool implements BufferPool {
     private final AtomicLong hits;
     private final AtomicLong misses;
     private boolean closed;
+    private final AtomicLong evictions;
+    private final BufferLogger logger;
 
     public DiskBufferPool(int capacity) {
+        this(capacity, null);
+    }
+
+    public DiskBufferPool(int capacity,BufferLogger logger) {
         this.capacity = capacity;
         this.tableFiles = new ConcurrentHashMap<>();
         this.cache = new ConcurrentHashMap<>();
@@ -32,6 +38,8 @@ public class DiskBufferPool implements BufferPool {
         this.hits = new AtomicLong(0);
         this.misses = new AtomicLong(0);
         this.closed = false;
+        this.evictions = new AtomicLong(0);
+        this.logger = logger;
 
         try {
             Files.createDirectories(Paths.get(DATA_DIR));
@@ -46,9 +54,11 @@ public class DiskBufferPool implements BufferPool {
             throw new IllegalStateException("BufferPool is closed");
         }
 
-        // 1. 先查缓存
         if (cache.containsKey(pageId)) {
             hits.incrementAndGet();
+            if (logger != null) {
+                logger.logHit(tableName, pageId);
+            }
             synchronized (accessOrder) {
                 accessOrder.remove(Integer.valueOf(pageId));
                 accessOrder.add(pageId);
@@ -56,15 +66,17 @@ public class DiskBufferPool implements BufferPool {
             return cache.get(pageId);
         }
 
-        // 2. 缓存未命中 -> 从文件加载
         misses.incrementAndGet();
+        if (logger != null) {
+            logger.logMiss(tableName, pageId);
+        }
         TableFile tf = getTableFile(tableName);
 
         // 3. 检查 pageId 是否存在于文件中
         if (pageId < tf.getPageCount()) {
             SlottedPage page = tf.loadPage(pageId);
             if (page != null) {
-                addToCache(pageId, page);
+                addToCache(tableName, pageId, page);  // ← 加 tableName
                 return page;
             }
         }
@@ -85,23 +97,22 @@ public class DiskBufferPool implements BufferPool {
         page.markDirty();
 
         tf.appendPage(page);
-        addToCache(pageId, page);
+        addToCache(tableName, pageId, page);
 
         return page;
     }
 
-    private void addToCache(int pageId, Page page) {
+    private void addToCache(String tableName, int pageId, Page page) {
         if (cache.size() >= capacity) {
-            evict();
+            evict(tableName);
         }
-
         cache.put(pageId, page);
         synchronized (accessOrder) {
             accessOrder.add(pageId);
         }
     }
 
-    private void evict() {
+    private void evict(String tableName) {
         if (cache.isEmpty()) {
             return;
         }
@@ -114,6 +125,10 @@ public class DiskBufferPool implements BufferPool {
         Page victim = cache.remove(victimId);
         if (victim != null && victim.isDirty()) {
             writePage(victim);
+        }
+        evictions.incrementAndGet();
+        if (logger != null) {
+            logger.logEvict(tableName, victimId);
         }
     }
 

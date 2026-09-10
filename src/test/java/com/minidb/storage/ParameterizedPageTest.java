@@ -67,13 +67,13 @@ class ParameterizedPageTest {
             // 继续插入
         }
 
-        // 验证页面已满
-        assertTrue(page.freeSpace() < 1,
-                name + ": 页面应该已满，当前空闲空间: " + page.freeSpace());
+        // 页满瞬间 freeSpace == 0
+        assertEquals(0, page.freeSpace(),
+                name + ": 页满瞬间 freeSpace 应该为 0，实际: " + page.freeSpace());
 
         // 再插入任意大小都应该返回 -1
         int result = page.insertRow(new byte[1]);
-        assertEquals(-1, result, name + ": 页满后插入应该返回 -1，实际返回: " + result);
+        assertEquals(-1, result, name + ": 页满后插入应该返回 -1");
 
         // 验证已有数据完整
         assertNotNull(page.readRow(0), name + ": 第一行数据应该完整");

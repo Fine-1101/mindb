@@ -3,6 +3,8 @@ package com.minidb.plan;
 import com.minidb.ast.CreateTableStmt;
 import com.minidb.ast.ColumnRef;
 import com.minidb.ast.DeleteStmt;
+import com.minidb.ast.Expression;
+import com.minidb.ast.FuncCall;
 import com.minidb.ast.InsertStmt;
 import com.minidb.ast.SelectStmt;
 import com.minidb.ast.Statement;
@@ -54,15 +56,34 @@ public class Planner {
             plan = new Filter(plan, stmt.where());
         }
 
-        // 3. 列投影
+        // 3. 检测聚合函数
         if (stmt.columns() != null) {
-            // SELECT col1, col2, ... → Project
-            List<String> colNames = stmt.columns().stream()
-                    .map(ColumnRef::column).toList();
-            plan = new Project(plan, colNames);
+            boolean hasAggregate = stmt.columns().stream().anyMatch(this::isAggregateFunc);
+            if (hasAggregate) {
+                // 聚合：AggregatePlan
+                List<FuncCall> aggregates = stmt.columns().stream()
+                        .map(e -> (FuncCall) e).toList();
+                plan = new AggregatePlan(plan, aggregates);
+            } else {
+                // 普通列投影
+                List<String> colNames = stmt.columns().stream()
+                        .map(e -> ((ColumnRef) e).column()).toList();
+                plan = new Project(plan, colNames);
+            }
         }
         // SELECT * → 不加 Project（columns == null 透传全部列）
 
         return plan;
+    }
+
+    /** 判断表达式是否为聚合函数调用。 */
+    private boolean isAggregateFunc(Expression expr) {
+        return expr instanceof FuncCall fc
+                && isAggregateName(fc.func().toLowerCase());
+    }
+
+    private static boolean isAggregateName(String name) {
+        return name.equals("count") || name.equals("sum") || name.equals("avg")
+                || name.equals("min") || name.equals("max");
     }
 }

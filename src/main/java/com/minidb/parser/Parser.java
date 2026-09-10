@@ -6,6 +6,7 @@ import com.minidb.ast.ColumnRef;
 import com.minidb.ast.CreateTableStmt;
 import com.minidb.ast.DeleteStmt;
 import com.minidb.ast.Expression;
+import com.minidb.ast.FuncCall;
 import com.minidb.ast.InsertStmt;
 import com.minidb.ast.Literal;
 import com.minidb.ast.SelectStmt;
@@ -268,17 +269,22 @@ public class Parser {
     private Statement parseSelect() throws MiniDbException {
         Token start = expect(TokenType.KW_SELECT);
 
-        List<ColumnRef> columns = null;
+        // DISTINCT
+        boolean distinct = false;
+        if (check(TokenType.IDENT) && "distinct".equalsIgnoreCase(peek().text())) {
+            advance();
+            distinct = true;
+        }
+
+        List<Expression> columns = null;
         if (check(TokenType.STAR)) {
             advance(); // SELECT *：columns == null
         } else {
             columns = new ArrayList<>();
-            Token col = expect(TokenType.IDENT);
-            columns.add(new ColumnRef(null, col.text(), col.pos()));
+            columns.add(parseSelectExpr());
             while (check(TokenType.COMMA)) {
                 advance();
-                col = expect(TokenType.IDENT);
-                columns.add(new ColumnRef(null, col.text(), col.pos()));
+                columns.add(parseSelectExpr());
             }
         }
 
@@ -290,7 +296,31 @@ public class Parser {
             advance();
             where = parseExpression();
         }
-        return new SelectStmt(columns, table.text(), where, start.pos());
+        return new SelectStmt(distinct, columns, table.text(), where, start.pos());
+    }
+
+    /** 解析 SELECT 列列表中的单个表达式：聚合函数调用 或 普通列引用。 */
+    private Expression parseSelectExpr() throws MiniDbException {
+        if (check(TokenType.IDENT) && lookaheadIsLParen()) {
+            Token funcName = advance();
+            expect(TokenType.LPAREN);
+            Expression arg = null;
+            if (check(TokenType.STAR)) {
+                advance(); // COUNT(*)
+            } else {
+                arg = parseExpression();
+            }
+            expect(TokenType.RPAREN);
+            return new FuncCall(funcName.text(), arg, funcName.pos());
+        }
+        Token col = expect(TokenType.IDENT);
+        return new ColumnRef(null, col.text(), col.pos());
+    }
+
+    /** 前瞻检查下一个 token 是否为 LPAREN。 */
+    private boolean lookaheadIsLParen() {
+        int next = index + 1;
+        return next < tokens.size() && tokens.get(next).type() == TokenType.LPAREN;
     }
 
     // ------------------------------------------------------------------
@@ -390,7 +420,7 @@ public class Parser {
         return parsePrimary();
     }
 
-    /** 原子：INT/FLOAT/STRING 字面量、列引用、括号表达式。 */
+    /** 原子：INT/FLOAT/STRING 字面量、列引用、括号表达式、函数调用（IDENT 后接 LPAREN）。 */
     private Expression parsePrimary() throws MiniDbException {
         Token t = peek();
         switch (t.type()) {
@@ -404,6 +434,19 @@ public class Parser {
                 advance();
                 return new Literal(t.value(), DataType.VARCHAR, t.pos());
             case IDENT:
+                // 检查是否为函数调用：IDENT 后接 LPAREN
+                if (lookaheadIsLParen()) {
+                    advance(); // 消费函数名
+                    expect(TokenType.LPAREN);
+                    Expression arg = null;
+                    if (check(TokenType.STAR)) {
+                        advance(); // COUNT(*)
+                    } else {
+                        arg = parseExpression();
+                    }
+                    expect(TokenType.RPAREN);
+                    return new FuncCall(t.text(), arg, t.pos());
+                }
                 advance();
                 return new ColumnRef(null, t.text(), t.pos());
             case LPAREN:

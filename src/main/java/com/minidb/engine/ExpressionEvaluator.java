@@ -4,6 +4,7 @@ import com.minidb.ast.BinaryExpr;
 import com.minidb.ast.BinaryOp;
 import com.minidb.ast.ColumnRef;
 import com.minidb.ast.Expression;
+import com.minidb.ast.FuncCall;
 import com.minidb.ast.Literal;
 import com.minidb.ast.UnaryExpr;
 import com.minidb.ast.UnaryOp;
@@ -48,6 +49,8 @@ public final class ExpressionEvaluator {
             }
             case BinaryExpr b -> evaluateBinary(b, columns, row);
             case UnaryExpr u -> evaluateUnary(u, columns, row);
+            case FuncCall fc -> throw new MiniDbException(MiniDbException.Phase.PLAN, fc.pos(),
+                    "聚合函数不能出现在 WHERE 条件中");
         };
     }
 

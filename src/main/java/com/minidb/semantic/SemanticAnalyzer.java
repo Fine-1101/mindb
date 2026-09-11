@@ -6,6 +6,7 @@ import com.minidb.ast.ColumnRef;
 import com.minidb.ast.CreateTableStmt;
 import com.minidb.ast.DeleteStmt;
 import com.minidb.ast.Expression;
+import com.minidb.ast.FuncCall;
 import com.minidb.ast.InsertStmt;
 import com.minidb.ast.Literal;
 import com.minidb.ast.SelectStmt;
@@ -79,6 +80,11 @@ public class SemanticAnalyzer {
                         MiniDbException.Phase.SEMANTIC, u.pos(),
                         "类型不匹配: " + u.op() + " " + ot));
             }
+            // D4-A 编译契约适配：FuncCall 已进入 Expression permits。
+            // 聚合函数的类型检查属于 B 的 D4 任务，这里只做“尚未支持”的最小占位。
+            case FuncCall f -> throw new MiniDbException(
+                    MiniDbException.Phase.SEMANTIC, f.pos(),
+                    "聚合函数语义尚未支持: " + f.func());
         };
     }
 
@@ -169,8 +175,15 @@ public class SemanticAnalyzer {
     private void checkSelect(SelectStmt s) throws MiniDbException {
         TableDef table = requireTable(s.tableName(), s.pos());
         if (s.columns() != null) {
-            for (ColumnRef c : s.columns()) {
-                resolveColumn(table.tableName(), c); // 纯存在性检查；SELECT * 的展开归 Planner
+            for (Expression col : s.columns()) {
+                if (col instanceof ColumnRef c) {
+                    resolveColumn(table.tableName(), c); // 纯存在性检查；SELECT * 的展开归 Planner
+                } else {
+                    // D4-A 编译契约适配：SELECT 列表现已可承载表达式（FuncCall）。
+                    // 聚合的混写/类型规则由 B 的 D4 任务实现，这里仅最小占位。
+                    throw new MiniDbException(MiniDbException.Phase.SEMANTIC, col.pos(),
+                            "聚合函数语义尚未支持: " + col);
+                }
             }
         }
         if (s.where() != null) {

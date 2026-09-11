@@ -6,6 +6,7 @@ import com.minidb.ast.ColumnRef;
 import com.minidb.ast.CreateTableStmt;
 import com.minidb.ast.DeleteStmt;
 import com.minidb.ast.Expression;
+import com.minidb.ast.FuncCall;
 import com.minidb.ast.InsertStmt;
 import com.minidb.ast.Literal;
 import com.minidb.ast.SelectStmt;
@@ -22,6 +23,7 @@ import com.minidb.lexer.TokenType;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -324,21 +326,15 @@ public class Parser {
     private Statement parseSelect() throws MiniDbException {
         expect(TokenType.KW_SELECT);
 
-        List<ColumnRef> columns = null;
+        List<Expression> columns = null;
         if (check(TokenType.STAR)) {
             advance(); // SELECT *：columns == null
         } else {
-            if (!check(TokenType.IDENT)) {
-                // 诊断：明确提示这里期待 * 或列名（例如 SELECT FROM t）
-                throw error(peek(), TokenType.STAR, TokenType.IDENT);
-            }
             columns = new ArrayList<>();
-            Token col = expect(TokenType.IDENT);
-            columns.add(new ColumnRef(null, col.text(), col.pos()));
+            columns.add(parseSelectItem());
             while (check(TokenType.COMMA)) {
                 advance();
-                col = expect(TokenType.IDENT);
-                columns.add(new ColumnRef(null, col.text(), col.pos()));
+                columns.add(parseSelectItem());
             }
         }
 
@@ -352,6 +348,22 @@ public class Parser {
         }
         // 约定：stmt.pos 为表名 token 位置
         return new SelectStmt(columns, table.text(), where, table.pos());
+    }
+
+    /**
+     * SELECT 列表项：普通列名，或聚合/函数调用（COUNT(*) / COUNT(a) / SUM(a + 1) ...）。
+     * 这里只接受 IDENT 开头（函数调用也是 IDENT '('），因此 SELECT FROM t 在标识符处报错。
+     */
+    private Expression parseSelectItem() throws MiniDbException {
+        if (!check(TokenType.IDENT)) {
+            // 诊断：明确提示这里期待 * 或列名/函数调用
+            throw error(peek(), TokenType.STAR, TokenType.IDENT);
+        }
+        if (peekType(1) == TokenType.LPAREN) {
+            return parseFunctionCall();
+        }
+        Token name = advance();
+        return new ColumnRef(null, name.text(), name.pos());
     }
 
     // ------------------------------------------------------------------
@@ -466,6 +478,9 @@ public class Parser {
                 advance();
                 return new Literal(t.value(), DataType.VARCHAR, t.pos());
             case IDENT:
+                if (peekType(1) == TokenType.LPAREN) {
+                    return parseFunctionCall();
+                }
                 advance();
                 return new ColumnRef(null, t.text(), t.pos());
             case LPAREN:
@@ -477,6 +492,30 @@ public class Parser {
                 throw error(t, TokenType.IDENT, TokenType.INT_LIT, TokenType.FLOAT_LIT,
                         TokenType.STRING, TokenType.LPAREN);
         }
+    }
+
+    /**
+     * 函数调用：IDENT '(' functionArg ')'。
+     *
+     * <p>func 统一保存大写形式（count(*)、CoUnT(*) → "COUNT"）；
+     * COUNT(*) 属于特殊语法，arg == null，不会构造成 ColumnRef("*")；
+     * 其他情况 arg 为完整表达式（允许 SUM(a + 1)、SUM((a + 1) * 2)）。
+     *
+     * <p>语法层不限制函数名：未知函数 FOO(x) 同样构造 FuncCall，
+     * 是否合法交由 Semantic 阶段判断。
+     */
+    private Expression parseFunctionCall() throws MiniDbException {
+        Token name = expect(TokenType.IDENT);
+        expect(TokenType.LPAREN);
+        Expression arg;
+        if (check(TokenType.STAR)) {
+            advance(); // COUNT(*) 特殊语法
+            arg = null;
+        } else {
+            arg = parseExpression();
+        }
+        expect(TokenType.RPAREN);
+        return new FuncCall(name.text().toUpperCase(Locale.ROOT), arg, name.pos());
     }
 
     // ==================================================================
@@ -496,6 +535,12 @@ public class Parser {
 
     private Token peek() {
         return tokens.get(index);
+    }
+
+    /** 向前看第 offset 个 Token 的类型（不移动 index）；越界按 EOF 处理。 */
+    private TokenType peekType(int offset) {
+        int i = index + offset;
+        return i < tokens.size() ? tokens.get(i).type() : TokenType.EOF;
     }
 
     private boolean check(TokenType type) {

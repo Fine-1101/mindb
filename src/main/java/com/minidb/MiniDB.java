@@ -361,7 +361,7 @@ public class MiniDB {
                 if (s.columns() == null) {
                     sb.append("*");
                 } else {
-                    sb.append(s.columns().stream().map(c -> "(col " + c.column() + ")").reduce("", (a, b) -> a + " " + b).trim());
+                    sb.append(s.columns().stream().map(this::selectItemToSExpr).reduce("", (a, b) -> a + " " + b).trim());
                 }
                 sb.append(" (from ").append(s.tableName()).append(")");
                 if (s.where() != null) {
@@ -381,12 +381,25 @@ public class MiniDB {
         };
     }
 
+    /**
+     * D4-A 编译契约适配：SELECT 列表元素已由 ColumnRef 放宽为 Expression。
+     * 这里只保留普通列的原有 S 表达式输出；聚合函数输出由 D 的 D4 任务实现。
+     */
+    private String selectItemToSExpr(Expression expr) {
+        if (expr instanceof ColumnRef ref) {
+            return "(col " + ref.column() + ")";
+        }
+        return "(func ...)";
+    }
+
     private String exprToSExpr(Expression expr) {
         return switch (expr) {
             case Literal lit -> String.valueOf(lit.value());
             case ColumnRef ref -> "(col " + ref.column() + ")";
             case BinaryExpr b -> "(" + b.op() + " " + exprToSExpr(b.left()) + " " + exprToSExpr(b.right()) + ")";
             case UnaryExpr u -> "(" + u.op() + " " + exprToSExpr(u.operand()) + ")";
+            // D4-A 编译契约适配：聚合打印由 D 的 D4 任务实现，这里仅占位。
+            case FuncCall f -> "(func " + f.func() + " ...)";
         };
     }
 
@@ -396,6 +409,8 @@ public class MiniDB {
             case ColumnRef ref -> ref.column();
             case BinaryExpr b -> exprToString(b.left()) + " " + b.op() + " " + exprToString(b.right());
             case UnaryExpr u -> u.op() + " " + exprToString(u.operand());
+            // D4-A 编译契约适配：聚合打印由 D 的 D4 任务实现，这里仅占位。
+            case FuncCall f -> f.func() + "(...)";
         };
     }
 

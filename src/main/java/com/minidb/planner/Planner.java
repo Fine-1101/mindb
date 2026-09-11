@@ -3,6 +3,7 @@ package com.minidb.planner;
 import com.minidb.ast.ColumnRef;
 import com.minidb.ast.CreateTableStmt;
 import com.minidb.ast.DeleteStmt;
+import com.minidb.ast.Expression;
 import com.minidb.ast.InsertStmt;
 import com.minidb.ast.SelectStmt;
 import com.minidb.ast.Statement;
@@ -18,6 +19,7 @@ import com.minidb.plan.PlanNode;
 import com.minidb.plan.Project;
 import com.minidb.plan.SeqScan;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -61,13 +63,25 @@ public class Planner {
         return new InsertPlan(insert.tableName(), targetColumns, insert.rows());
     }
 
-    private PlanNode planSelect(SelectStmt select) {
+    private PlanNode planSelect(SelectStmt select) throws MiniDbException {
         PlanNode source = new SeqScan(select.tableName());
         if (select.where() != null) {
             source = new Filter(source, select.where());
         }
-        List<String> columns = select.columns() == null ? null
-                : select.columns().stream().map(ColumnRef::column).toList();
+        List<String> columns = null;
+        if (select.columns() != null) {
+            columns = new ArrayList<>();
+            for (Expression col : select.columns()) {
+                if (col instanceof ColumnRef ref) {
+                    columns.add(ref.column());
+                } else {
+                    // D4-A 编译契约适配：SELECT 列表现可承载 FuncCall。
+                    // 聚合计划（AggregatePlan 等）属于 D 的 D4 任务，这里仅最小占位。
+                    throw new MiniDbException(MiniDbException.Phase.PLAN, col.pos(),
+                            "聚合查询计划尚未支持: " + col);
+                }
+            }
+        }
         return new Project(source, columns);
     }
 }

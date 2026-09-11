@@ -48,3 +48,15 @@ INSERT INTO student VALUES (3, '', 77.7);
 
 -- 11. SELECT DISTINCT（D4 新增关键字覆盖）
 SELECT DISTINCT name FROM student;
+
+-- 12. UPDATE（D5：SET + WHERE）
+UPDATE student SET score = score + 5 WHERE id = 1;
+
+-- 13. UPDATE（D5：SET NULL + IS NULL）
+UPDATE student SET name = NULL WHERE score IS NULL;
+
+-- 14. SELECT（D5：JOIN ... ON ... 限定列）
+SELECT id, name FROM student JOIN course ON student.id = course.cid;
+
+-- 15. SELECT（D5：IS NOT NULL + GROUP BY + ORDER BY ASC/DESC）
+SELECT name, COUNT(*) FROM student WHERE score IS NOT NULL GROUP BY name ORDER BY name ASC, score DESC;

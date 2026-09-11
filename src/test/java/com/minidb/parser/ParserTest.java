@@ -12,6 +12,7 @@ import com.minidb.ast.SelectStmt;
 import com.minidb.ast.Statement;
 import com.minidb.ast.UnaryExpr;
 import com.minidb.ast.UnaryOp;
+import com.minidb.ast.UpdateStmt;
 import com.minidb.catalog.ColumnDef;
 import com.minidb.common.DataType;
 import com.minidb.common.MiniDbException;
@@ -650,12 +651,13 @@ class ParserTest {
             sql = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
         }
         List<Statement> stmts = new Parser().parseScript(new Lexer().tokenize(sql));
-        // 11 条（D4 追加 SELECT DISTINCT name FROM student）
-        assertEquals(11, stmts.size());
+        // 15 条（D4 追加 DISTINCT；D5 追加 2 条 UPDATE、1 条 JOIN、1 条 GROUP BY+ORDER BY）
+        assertEquals(15, stmts.size());
         assertEquals(2, stmts.stream().filter(s -> s instanceof CreateTableStmt).count());
         assertEquals(3, stmts.stream().filter(s -> s instanceof InsertStmt).count());
-        assertEquals(4, stmts.stream().filter(s -> s instanceof SelectStmt).count());
+        assertEquals(6, stmts.stream().filter(s -> s instanceof SelectStmt).count());
         assertEquals(2, stmts.stream().filter(s -> s instanceof DeleteStmt).count());
+        assertEquals(2, stmts.stream().filter(s -> s instanceof UpdateStmt).count());
     }
 
     // ==================================================================

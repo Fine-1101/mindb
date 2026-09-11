@@ -6,6 +6,7 @@ import com.minidb.ast.ColumnRef;
 import com.minidb.ast.CreateTableStmt;
 import com.minidb.ast.DeleteStmt;
 import com.minidb.ast.Expression;
+import com.minidb.ast.FuncCall;
 import com.minidb.ast.InsertStmt;
 import com.minidb.ast.Literal;
 import com.minidb.ast.SelectStmt;
@@ -272,13 +273,8 @@ class SemanticAnalyzerTest {
     @Test
     void selectWithColumnsAndWherePasses() throws Exception {
         // SELECT id, name FROM student WHERE score >= 90.0
-<<<<<<< HEAD
         analyzer(studentCatalog()).analyze(new SelectStmt(
-                List.<Expression>of(new ColumnRef(null, "id", p(1, 8)),
-=======
-        analyzer(studentCatalog()).analyze(new SelectStmt(false,
                 List.of(new ColumnRef(null, "id", p(1, 8)),
->>>>>>> origin/D4-D-aggregate-function
                         new ColumnRef(null, "name", p(1, 12))),
                 "student",
                 new BinaryExpr(new ColumnRef(null, "score", p(1, 32)), BinaryOp.GE,
@@ -289,7 +285,7 @@ class SemanticAnalyzerTest {
     @Test
     void selectStarWithWherePasses() throws Exception {
         // SELECT * FROM student WHERE id = 1
-        analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
+        analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
                 idEqOne(1, 33, 39), p(1, 15)));
     }
 
@@ -297,7 +293,7 @@ class SemanticAnalyzerTest {
     void selectTableMissingRejectedAtTablePosition() {
         // SELECT * FROM stuent WHERE id = 1 —— pos 是 stuent 的位置(1,15)，不是语句首(1,1)
         MiniDbException e = assertThrows(MiniDbException.class, () ->
-                analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "stuent",
+                analyzer(studentCatalog()).analyze(new SelectStmt(null, "stuent",
                         idEqOne(1, 33, 39), p(1, 15))));
         assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
         assertEquals(p(1, 15), e.pos());
@@ -308,13 +304,8 @@ class SemanticAnalyzerTest {
     void selectUnknownColumnRejectedAtColumnPosition() {
         // SELECT naem FROM student —— pos 是 naem 的位置(1,8)
         MiniDbException e = assertThrows(MiniDbException.class, () ->
-<<<<<<< HEAD
                 analyzer(studentCatalog()).analyze(new SelectStmt(
-                        List.<Expression>of(new ColumnRef(null, "naem", p(1, 8))),
-=======
-                analyzer(studentCatalog()).analyze(new SelectStmt(false,
                         List.of(new ColumnRef(null, "naem", p(1, 8))),
->>>>>>> origin/D4-D-aggregate-function
                         "student", null, p(1, 18))));
         assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
         assertEquals(p(1, 8), e.pos());
@@ -324,7 +315,7 @@ class SemanticAnalyzerTest {
     @Test
     void selectWhereVarcharComparisonPasses() throws Exception {
         // SELECT * FROM student WHERE name = 'x' （VARCHAR=VARCHAR 合法）
-        analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
+        analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
                 new BinaryExpr(new ColumnRef(null, "name", p(1, 33)), BinaryOp.EQ,
                         new Literal("x", DataType.VARCHAR, p(1, 40)), p(1, 33)),
                 p(1, 15)));
@@ -333,7 +324,7 @@ class SemanticAnalyzerTest {
     @Test
     void selectWhereNotComparisonPasses() throws Exception {
         // SELECT * FROM student WHERE NOT id = 1 （NOT 作用于比较结果）
-        analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
+        analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
                 new UnaryExpr(UnaryOp.NOT, idEqOne(1, 37, 43), p(1, 33)), p(1, 15)));
     }
 
@@ -341,7 +332,7 @@ class SemanticAnalyzerTest {
     void selectWhereNonBooleanRejected() {
         // SELECT * FROM student WHERE id —— WHERE 是 INT 列
         MiniDbException e = assertThrows(MiniDbException.class, () ->
-                analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
+                analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
                         new ColumnRef(null, "id", p(1, 33)), p(1, 15))));
         assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
         assertEquals(p(1, 33), e.pos());
@@ -352,7 +343,7 @@ class SemanticAnalyzerTest {
     void selectWhereAndOfIntsRejected() {
         // SELECT * FROM student WHERE 1 AND 2 —— AND 操作数非 BOOLEAN
         MiniDbException e = assertThrows(MiniDbException.class, () ->
-                analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
+                analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
                         new BinaryExpr(new Literal(1, DataType.INT, p(1, 33)), BinaryOp.AND,
                                 new Literal(2, DataType.INT, p(1, 40)), p(1, 33)),
                         p(1, 15))));
@@ -364,12 +355,114 @@ class SemanticAnalyzerTest {
     void selectWhereCrossTypeComparisonRejected() {
         // SELECT * FROM student WHERE id = 'x' —— INT = VARCHAR 跨类
         MiniDbException e = assertThrows(MiniDbException.class, () ->
-                analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
+                analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
                         new BinaryExpr(new ColumnRef(null, "id", p(1, 33)), BinaryOp.EQ,
                                 new Literal("x", DataType.VARCHAR, p(1, 38)), p(1, 33)),
                         p(1, 15))));
         assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
         assertTrue(e.getMessage().contains("INT EQ VARCHAR"));
+    }
+
+    // ==================================================================
+    // Select 聚合四查（D4）：混写 / 未知函数 / 非 COUNT 用 * / 参数类型不支持
+    // ==================================================================
+
+    @Test
+    void scalarAggregatesPass() throws Exception {
+        // SELECT COUNT(*), SUM(score), AVG(score), MIN(name), MAX(id) FROM student
+        analyzer(studentCatalog()).analyze(new SelectStmt(null, List.of(
+                new FuncCall("COUNT", null, p(1, 8)),
+                new FuncCall("SUM", new ColumnRef(null, "score", p(1, 18)), p(1, 18)),
+                new FuncCall("AVG", new ColumnRef(null, "score", p(1, 31)), p(1, 31)),
+                new FuncCall("MIN", new ColumnRef(null, "name", p(1, 44)), p(1, 44)),
+                new FuncCall("MAX", new ColumnRef(null, "id", p(1, 56)), p(1, 56))),
+                "student", null, false, p(1, 65)));
+    }
+
+    @Test
+    void aggregateMixedWithColumnRejected() {
+        // SELECT name, COUNT(*) FROM student —— pos 定位到首个聚合项
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "name", p(1, 8))),
+                        List.of(new FuncCall("COUNT", null, p(1, 15))),
+                        "student", null, false, p(1, 27))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 15), e.pos());
+        assertTrue(e.getMessage().contains("混写"));
+    }
+
+    @Test
+    void unknownAggregateFuncRejected() {
+        // SELECT FOO(id) FROM student
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(null,
+                        List.of(new FuncCall("FOO", new ColumnRef(null, "id", p(1, 12)), p(1, 8))),
+                        "student", null, false, p(1, 20))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 8), e.pos());
+        assertTrue(e.getMessage().contains("FOO"));
+    }
+
+    @Test
+    void starArgOnlyForCountRejected() {
+        // SELECT SUM(*) FROM student
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(null,
+                        List.of(new FuncCall("SUM", null, p(1, 8))),
+                        "student", null, false, p(1, 17))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertTrue(e.getMessage().contains("COUNT"));
+    }
+
+    @Test
+    void aggregateArgTypeRejected() {
+        // SELECT SUM(name) FROM student —— VARCHAR 不支持 SUM
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(null,
+                        List.of(new FuncCall("SUM", new ColumnRef(null, "name", p(1, 12)), p(1, 8))),
+                        "student", null, false, p(1, 22))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 8), e.pos());
+        assertTrue(e.getMessage().contains("SUM"));
+    }
+
+    @Test
+    void aggregateInWhereRejected() {
+        // SELECT name FROM student WHERE COUNT(id) > 1 —— pos 定位到聚合函数名
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "name", p(1, 8))),
+                        "student",
+                        new BinaryExpr(new FuncCall("COUNT", new ColumnRef(null, "id", p(1, 37)), p(1, 33)),
+                                BinaryOp.GT, new Literal(1, DataType.INT, p(1, 46)), p(1, 43)),
+                        p(1, 25))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 33), e.pos());
+        assertTrue(e.getMessage().contains("WHERE"));
+    }
+
+    @Test
+    void nestedAggregateRejected() {
+        // SELECT SUM(COUNT(*)) FROM student —— infer(FuncCall) 到达即嵌套聚合
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(null,
+                        List.of(new FuncCall("SUM", new FuncCall("COUNT", null, p(1, 12)), p(1, 8))),
+                        "student", null, false, p(1, 26))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertTrue(e.getMessage().contains("嵌套聚合"));
+    }
+
+    @Test
+    void aggregateUnknownColumnRejectedAtColumnPosition() {
+        // SELECT SUM(scroe) FROM student —— pos 是 scroe 自己的位置
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(null,
+                        List.of(new FuncCall("SUM", new ColumnRef(null, "scroe", p(1, 12)), p(1, 8))),
+                        "student", null, false, p(1, 23))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 12), e.pos());
+        assertTrue(e.getMessage().contains("scroe"));
     }
 
     // ==================================================================
@@ -411,7 +504,7 @@ class SemanticAnalyzerTest {
     @Test
     void qualifiedColumnRefPassesWhenTableMatches() throws Exception {
         // SELECT * FROM student WHERE student.id = 1 —— 限定名等于当前表名
-        analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
+        analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
                 new BinaryExpr(new ColumnRef("student", "id", p(1, 33)), BinaryOp.EQ,
                         new Literal(1, DataType.INT, p(1, 46)), p(1, 33)),
                 p(1, 15)));
@@ -421,7 +514,7 @@ class SemanticAnalyzerTest {
     void unknownTableQualifierRejectedAtRefPosition() {
         // SELECT * FROM student WHERE x.id = 1 —— 限定名不等于当前表名
         MiniDbException e = assertThrows(MiniDbException.class, () ->
-                analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
+                analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
                         new BinaryExpr(new ColumnRef("x", "id", p(1, 33)), BinaryOp.EQ,
                                 new Literal(1, DataType.INT, p(1, 38)), p(1, 33)),
                         p(1, 15))));

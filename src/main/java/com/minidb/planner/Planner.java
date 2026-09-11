@@ -3,14 +3,15 @@ package com.minidb.planner;
 import com.minidb.ast.ColumnRef;
 import com.minidb.ast.CreateTableStmt;
 import com.minidb.ast.DeleteStmt;
-import com.minidb.ast.Expression;
 import com.minidb.ast.InsertStmt;
 import com.minidb.ast.SelectStmt;
 import com.minidb.ast.Statement;
+import com.minidb.ast.UpdateStmt;
 import com.minidb.catalog.Catalog;
 import com.minidb.catalog.ColumnDef;
 import com.minidb.catalog.TableDef;
 import com.minidb.common.MiniDbException;
+import com.minidb.plan.AggregatePlan;
 import com.minidb.plan.CreateTablePlan;
 import com.minidb.plan.DeletePlan;
 import com.minidb.plan.Filter;
@@ -19,7 +20,6 @@ import com.minidb.plan.PlanNode;
 import com.minidb.plan.Project;
 import com.minidb.plan.SeqScan;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -46,6 +46,9 @@ public class Planner {
             case InsertStmt insert -> planInsert(insert);
             case SelectStmt select -> planSelect(select);
             case DeleteStmt delete -> new DeletePlan(delete.tableName(), delete.where());
+            // D5 M0 桩：UPDATE 计划生成在并行阶段实现（Semantic 桩先行拦截，正常不可达）
+            case UpdateStmt update -> throw new MiniDbException(MiniDbException.Phase.PLAN, update.pos(),
+                    "UPDATE 计划生成未实现（D5 并行阶段）");
         };
     }
 
@@ -63,25 +66,17 @@ public class Planner {
         return new InsertPlan(insert.tableName(), targetColumns, insert.rows());
     }
 
-    private PlanNode planSelect(SelectStmt select) throws MiniDbException {
+    private PlanNode planSelect(SelectStmt select) {
         PlanNode source = new SeqScan(select.tableName());
         if (select.where() != null) {
             source = new Filter(source, select.where());
         }
-        List<String> columns = null;
-        if (select.columns() != null) {
-            columns = new ArrayList<>();
-            for (Expression col : select.columns()) {
-                if (col instanceof ColumnRef ref) {
-                    columns.add(ref.column());
-                } else {
-                    // D4-A 编译契约适配：SELECT 列表现可承载 FuncCall。
-                    // 聚合计划（AggregatePlan 等）属于 D 的 D4 任务，这里仅最小占位。
-                    throw new MiniDbException(MiniDbException.Phase.PLAN, col.pos(),
-                            "聚合查询计划尚未支持: " + col);
-                }
-            }
+        if (select.aggregates() != null) {
+            // SELECT 含聚合 → AggregatePlan（语义层已拒绝与普通列混写，无 Project 层）
+            return new AggregatePlan(source, select.aggregates());
         }
-        return new Project(source, columns);
+        List<String> columns = select.columns() == null ? null
+                : select.columns().stream().map(ColumnRef::column).toList();
+        return new Project(source, columns, select.distinct());
     }
 }

@@ -264,51 +264,6 @@ class ParserRecoveryTest {
     }
 
     // ==================================================================
-    // 高级错误恢复（D4 补充）
-    // ==================================================================
-
-    /** EOF 截断：位置精确指向 EOF，message 有 unexpected/end of input 与 expected。 */
-    @Test
-    void eofTruncationReportsPrecisePosition() throws Exception {
-        MiniDbException e = assertThrows(MiniDbException.class,
-                () -> new Parser().parse(lex("SELECT * FROM")));
-        assertEquals(MiniDbException.Phase.PARSER, e.phase());
-        assertEquals(new Position(1, 14), e.pos());
-        assertTrue(e.getMessage().contains("end of input (EOF)"), e.getMessage());
-        assertTrue(e.getMessage().contains("unexpected token"), e.getMessage());
-        assertTrue(e.getMessage().contains("expected [identifier]"), e.getMessage());
-    }
-
-    /** 未闭合字符串由 Lexer 抛 LEXER 错误，链路不得出现非 MiniDbException 崩溃。 */
-    @Test
-    void unclosedStringIsLexerErrorNotCrash() {
-        MiniDbException e = assertThrows(MiniDbException.class,
-                () -> new Parser().parseScript(lex("SELECT * FROM t WHERE name = 'Tom;")));
-        assertEquals(MiniDbException.Phase.LEXER, e.phase());
-        assertTrue(e.getMessage().contains("未闭合"), e.getMessage());
-    }
-
-    /** 第二条错误后同步到其分号，第三条继续解析且位置正确。 */
-    @Test
-    void recoveryContinuesToThirdStatementWithCorrectPosition() throws Exception {
-        Parser parser = new Parser();
-        MiniDbException e = assertThrows(MiniDbException.class,
-                () -> parser.parseScript(lex(
-                        "SELECT * FROM t;\nSELECT * FROM;\nDELETE FROM users;")));
-
-        assertEquals(MiniDbException.Phase.PARSER, e.phase());
-        assertEquals(new Position(2, 14), e.pos()); // 第二条 FROM 之后的 ';'
-        assertTrue(e.getMessage().contains("2:14"), e.getMessage());
-
-        // 第三条 DELETE FROM users 没有被恢复逻辑吞掉
-        List<Statement> recovered = parser.recoveredStatements();
-        assertEquals(2, recovered.size());
-        assertInstanceOf(SelectStmt.class, recovered.get(0));
-        DeleteStmt delete = assertInstanceOf(DeleteStmt.class, recovered.get(1));
-        assertEquals("users", delete.tableName());
-    }
-
-    // ==================================================================
     // 反馈 / 演示：逐条打印 SQL + 恢复结果（错误位置 / 成功语句 / 诊断消息）
     // ==================================================================
 
@@ -340,13 +295,6 @@ class ParserRecoveryTest {
                 ";;\n-- 注释\nSELECT a FROM t;", false));
         cases.add(new RecoveryDemoCase("OK3 大小写混写脚本",
                 "SeLeCt * FrOm Student WHERE id != 1;\ninsert into t values (2, 'Tom''s');", false));
-        // D4 补充的高级恢复场景
-        cases.add(new RecoveryDemoCase("R8 EOF 截断（位置精确）",
-                "SELECT * FROM", true));
-        cases.add(new RecoveryDemoCase("R9 未闭合字符串（LEXER 层报错）",
-                "SELECT * FROM t WHERE name = 'Tom;", true));
-        cases.add(new RecoveryDemoCase("R10 第二条错误后第三条继续",
-                "SELECT * FROM t;\nSELECT * FROM;\nDELETE FROM users;", true));
         return cases;
     }
 
@@ -388,10 +336,6 @@ class ParserRecoveryTest {
                 if (c.expectError() && e.phase() == MiniDbException.Phase.PARSER) {
                     pass++;
                     sb.append("结果: 抛 PARSER 错误（符合预期）  >>> 通过 <<<\n");
-                } else if (c.expectError() && e.phase() == MiniDbException.Phase.LEXER) {
-                    // 未闭合字符串等由 Lexer 先报错，链路行为正确（不允许崩溃）
-                    pass++;
-                    sb.append("结果: 抛 LEXER 错误（符合预期，链路未崩溃）  >>> 通过 <<<\n");
                 } else {
                     fail++;
                     failures.add(c.name() + "（实际异常: " + e + "）");

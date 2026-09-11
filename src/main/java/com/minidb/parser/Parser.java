@@ -326,32 +326,30 @@ public class Parser {
     private Statement parseSelect() throws MiniDbException {
         expect(TokenType.KW_SELECT);
 
-<<<<<<< HEAD
-=======
-        // DISTINCT
         boolean distinct = false;
-        if (check(TokenType.IDENT) && "distinct".equalsIgnoreCase(peek().text())) {
+        if (check(TokenType.KW_DISTINCT)) {
             advance();
             distinct = true;
         }
 
->>>>>>> origin/D4-D-aggregate-function
-        List<Expression> columns = null;
+        List<ColumnRef> columns = null;
+        List<FuncCall> aggregates = null;
         if (check(TokenType.STAR)) {
             advance(); // SELECT *：columns == null
         } else {
-            columns = new ArrayList<>();
-<<<<<<< HEAD
-            columns.add(parseSelectItem());
+            List<ColumnRef> cols = new ArrayList<>();
+            List<FuncCall> aggs = new ArrayList<>();
+            parseSelectItem(cols, aggs);
             while (check(TokenType.COMMA)) {
                 advance();
-                columns.add(parseSelectItem());
-=======
-            columns.add(parseSelectExpr());
-            while (check(TokenType.COMMA)) {
-                advance();
-                columns.add(parseSelectExpr());
->>>>>>> origin/D4-D-aggregate-function
+                parseSelectItem(cols, aggs);
+            }
+            // 纯聚合时 columns 保持 null（与 SELECT * 同形，Planner 按 aggregates 分流）
+            if (!cols.isEmpty()) {
+                columns = cols;
+            }
+            if (!aggs.isEmpty()) {
+                aggregates = aggs;
             }
         }
 
@@ -363,52 +361,35 @@ public class Parser {
             advance();
             where = parseExpression();
         }
-<<<<<<< HEAD
         // 约定：stmt.pos 为表名 token 位置
-        return new SelectStmt(columns, table.text(), where, table.pos());
+        return new SelectStmt(columns, aggregates, table.text(), where, distinct, table.pos());
     }
 
-    /**
-     * SELECT 列表项：普通列名，或聚合/函数调用（COUNT(*) / COUNT(a) / SUM(a + 1) ...）。
-     * 这里只接受 IDENT 开头（函数调用也是 IDENT '('），因此 SELECT FROM t 在标识符处报错。
-     */
-    private Expression parseSelectItem() throws MiniDbException {
+    /** SELECT 列表项：IDENT( → 聚合 FuncCall；否则普通列。混写由 Semantic 报"聚合函数不能与普通列混写"。 */
+    private void parseSelectItem(List<ColumnRef> columns, List<FuncCall> aggregates) throws MiniDbException {
         if (!check(TokenType.IDENT)) {
-            // 诊断：明确提示这里期待 * 或列名/函数调用
+            // 诊断：明确提示这里期待 * 或列名/聚合项（例如 SELECT FROM t）
             throw error(peek(), TokenType.STAR, TokenType.IDENT);
         }
-        if (peekType(1) == TokenType.LPAREN) {
-            return parseFunctionCall();
+        Token t = expect(TokenType.IDENT);
+        if (check(TokenType.LPAREN)) {
+            aggregates.add(parseFuncCallRest(t));
+        } else {
+            columns.add(new ColumnRef(null, t.text(), t.pos()));
         }
-        Token name = advance();
-        return new ColumnRef(null, name.text(), name.pos());
-=======
-        return new SelectStmt(distinct, columns, table.text(), where, start.pos());
     }
 
-    /** 解析 SELECT 列列表中的单个表达式：聚合函数调用 或 普通列引用。 */
-    private Expression parseSelectExpr() throws MiniDbException {
-        if (check(TokenType.IDENT) && lookaheadIsLParen()) {
-            Token funcName = advance();
-            expect(TokenType.LPAREN);
-            Expression arg = null;
-            if (check(TokenType.STAR)) {
-                advance(); // COUNT(*)
-            } else {
-                arg = parseExpression();
-            }
-            expect(TokenType.RPAREN);
-            return new FuncCall(funcName.text(), arg, funcName.pos());
+    /** IDENT( 已消费到 '(' 处：解析 ) / * ) / expr )。func 大写规范化（未知名交 Semantic 报"未知聚合函数"）。 */
+    private FuncCall parseFuncCallRest(Token name) throws MiniDbException {
+        advance(); // 消费 '('
+        Expression arg = null;
+        if (check(TokenType.STAR)) {
+            advance(); // COUNT(*)
+        } else if (!check(TokenType.RPAREN)) {
+            arg = parseExpression();
         }
-        Token col = expect(TokenType.IDENT);
-        return new ColumnRef(null, col.text(), col.pos());
-    }
-
-    /** 前瞻检查下一个 token 是否为 LPAREN。 */
-    private boolean lookaheadIsLParen() {
-        int next = index + 1;
-        return next < tokens.size() && tokens.get(next).type() == TokenType.LPAREN;
->>>>>>> origin/D4-D-aggregate-function
+        expect(TokenType.RPAREN);
+        return new FuncCall(name.text().toUpperCase(Locale.ROOT), arg, name.pos());
     }
 
     // ------------------------------------------------------------------
@@ -509,7 +490,7 @@ public class Parser {
         return parsePrimary();
     }
 
-    /** 原子：INT/FLOAT/STRING 字面量、列引用、括号表达式、函数调用（IDENT 后接 LPAREN）。 */
+    /** 原子：INT/FLOAT/STRING 字面量、列引用、括号表达式。 */
     private Expression parsePrimary() throws MiniDbException {
         Token t = peek();
         switch (t.type()) {
@@ -523,25 +504,11 @@ public class Parser {
                 advance();
                 return new Literal(t.value(), DataType.VARCHAR, t.pos());
             case IDENT:
-<<<<<<< HEAD
-                if (peekType(1) == TokenType.LPAREN) {
-                    return parseFunctionCall();
-=======
-                // 检查是否为函数调用：IDENT 后接 LPAREN
-                if (lookaheadIsLParen()) {
-                    advance(); // 消费函数名
-                    expect(TokenType.LPAREN);
-                    Expression arg = null;
-                    if (check(TokenType.STAR)) {
-                        advance(); // COUNT(*)
-                    } else {
-                        arg = parseExpression();
-                    }
-                    expect(TokenType.RPAREN);
-                    return new FuncCall(t.text(), arg, t.pos());
->>>>>>> origin/D4-D-aggregate-function
-                }
                 advance();
+                if (check(TokenType.LPAREN)) {
+                    // IDENT( → 聚合函数（如 WHERE 中的 COUNT(x)，Semantic 层判定合法性并报错）
+                    return parseFuncCallRest(t);
+                }
                 return new ColumnRef(null, t.text(), t.pos());
             case LPAREN:
                 advance();
@@ -552,30 +519,6 @@ public class Parser {
                 throw error(t, TokenType.IDENT, TokenType.INT_LIT, TokenType.FLOAT_LIT,
                         TokenType.STRING, TokenType.LPAREN);
         }
-    }
-
-    /**
-     * 函数调用：IDENT '(' functionArg ')'。
-     *
-     * <p>func 统一保存大写形式（count(*)、CoUnT(*) → "COUNT"）；
-     * COUNT(*) 属于特殊语法，arg == null，不会构造成 ColumnRef("*")；
-     * 其他情况 arg 为完整表达式（允许 SUM(a + 1)、SUM((a + 1) * 2)）。
-     *
-     * <p>语法层不限制函数名：未知函数 FOO(x) 同样构造 FuncCall，
-     * 是否合法交由 Semantic 阶段判断。
-     */
-    private Expression parseFunctionCall() throws MiniDbException {
-        Token name = expect(TokenType.IDENT);
-        expect(TokenType.LPAREN);
-        Expression arg;
-        if (check(TokenType.STAR)) {
-            advance(); // COUNT(*) 特殊语法
-            arg = null;
-        } else {
-            arg = parseExpression();
-        }
-        expect(TokenType.RPAREN);
-        return new FuncCall(name.text().toUpperCase(Locale.ROOT), arg, name.pos());
     }
 
     // ==================================================================
@@ -595,12 +538,6 @@ public class Parser {
 
     private Token peek() {
         return tokens.get(index);
-    }
-
-    /** 向前看第 offset 个 Token 的类型（不移动 index）；越界按 EOF 处理。 */
-    private TokenType peekType(int offset) {
-        int i = index + offset;
-        return i < tokens.size() ? tokens.get(i).type() : TokenType.EOF;
     }
 
     private boolean check(TokenType type) {

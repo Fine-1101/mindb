@@ -49,15 +49,9 @@ public final class ExpressionEvaluator {
             }
             case BinaryExpr b -> evaluateBinary(b, columns, row);
             case UnaryExpr u -> evaluateUnary(u, columns, row);
-<<<<<<< HEAD
-            // D4-A 编译契约适配：FuncCall 已进入 Expression permits。
-            // 聚合执行（AggregateExecutor）属于 D 的 D4 任务，这里只给最小占位分支。
+            // 聚合已由 Semantic 拒绝进 WHERE/行级求值；执行端到达 = 内部状态异常
             case FuncCall f -> throw new MiniDbException(MiniDbException.Phase.PLAN, f.pos(),
-                    "聚合函数执行尚未支持: " + f.func());
-=======
-            case FuncCall fc -> throw new MiniDbException(MiniDbException.Phase.PLAN, fc.pos(),
-                    "聚合函数不能出现在 WHERE 条件中");
->>>>>>> origin/D4-D-aggregate-function
+                    "聚合函数不允许出现在行级求值中: " + f.display());
         };
     }
 
@@ -116,6 +110,9 @@ public final class ExpressionEvaluator {
                 default -> throw new MiniDbException(MiniDbException.Phase.PLAN, u.pos(),
                         "NEG 不支持类型: " + operand.getClass().getSimpleName());
             };
+            // D5 M0 桩：IS [NOT] NULL 求值（并行阶段实现，M0 无该运算产生）
+            case IS_NULL, IS_NOT_NULL -> throw new MiniDbException(MiniDbException.Phase.PLAN, u.pos(),
+                    "IS NULL 求值未实现（D5 并行阶段）");
         };
     }
 

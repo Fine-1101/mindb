@@ -16,8 +16,8 @@ public class DiskBufferPool implements BufferPool {
     private static final String DATA_DIR = "data";
     private final int capacity;
     private final Map<String, TableFile> tableFiles;
-    private final Map<Integer, Page> cache;
-    private final List<Integer> accessOrder;
+    private final Map<String, Page> cache;
+    private final List<String> accessOrder;
     private final AtomicInteger nextPageId;
     private final AtomicLong hits;
     private final AtomicLong misses;
@@ -54,16 +54,17 @@ public class DiskBufferPool implements BufferPool {
             throw new IllegalStateException("BufferPool is closed");
         }
 
-        if (cache.containsKey(pageId)) {
+        String key = tableName + ":" + pageId;
+        if (cache.containsKey(key)) {
             hits.incrementAndGet();
             if (logger != null) {
                 logger.logHit(tableName, pageId);
             }
             synchronized (accessOrder) {
-                accessOrder.remove(Integer.valueOf(pageId));
-                accessOrder.add(pageId);
+                accessOrder.remove(key);
+                accessOrder.add(key);
             }
-            return cache.get(pageId);
+            return cache.get(key);
         }
 
         misses.incrementAndGet();
@@ -106,9 +107,10 @@ public class DiskBufferPool implements BufferPool {
         if (cache.size() >= capacity) {
             evict(tableName);
         }
-        cache.put(pageId, page);
+        String key = tableName + ":" + pageId;
+        cache.put(key, page);
         synchronized (accessOrder) {
-            accessOrder.add(pageId);
+            accessOrder.add(key);
         }
     }
 
@@ -117,31 +119,30 @@ public class DiskBufferPool implements BufferPool {
             return;
         }
 
-        int victimId;
+        String victimKey;
         synchronized (accessOrder) {
-            victimId = accessOrder.remove(0);
+            victimKey = accessOrder.remove(0);
         }
 
-        Page victim = cache.remove(victimId);
+        Page victim = cache.remove(victimKey);
         if (victim != null && victim.isDirty()) {
-            writePage(victim);
+            writePage(victimKey.substring(0, victimKey.indexOf(':')), victim);
         }
         evictions.incrementAndGet();
         if (logger != null) {
-            logger.logEvict(tableName, victimId);
+            int sep = victimKey.indexOf(':');
+            logger.logEvict(victimKey.substring(0, sep),
+                    Integer.parseInt(victimKey.substring(sep + 1)));
         }
     }
 
-    private void writePage(Page page) {
+    private void writePage(String tableName, Page page) {
         if (!(page instanceof SlottedPage)) {
             return;
         }
-        SlottedPage sp = (SlottedPage) page;
-        for (Map.Entry<String, TableFile> entry : tableFiles.entrySet()) {
-            if (entry.getValue().writePage(sp)) {
-                sp.markClean();
-                return;
-            }
+        // 复合缓存键后按表定向写盘：原实现遍历所有表文件试写，多表同号页会写错文件
+        if (getTableFile(tableName).writePage((SlottedPage) page)) {
+            page.markClean();
         }
     }
 
@@ -151,10 +152,11 @@ public class DiskBufferPool implements BufferPool {
             return;
         }
 
-        for (Page page : cache.values()) {
-            if (page.isDirty()) {
-                writePage(page);
-                page.markClean();
+        for (Map.Entry<String, Page> entry : cache.entrySet()) {
+            if (entry.getValue().isDirty()) {
+                String key = entry.getKey();
+                writePage(key.substring(0, key.indexOf(':')), entry.getValue());
+                entry.getValue().markClean();
             }
         }
         for (TableFile tf : tableFiles.values()) {
@@ -172,11 +174,11 @@ public class DiskBufferPool implements BufferPool {
     }
 
     public int getTablePageCount(String tableName) {
-        TableFile tf = tableFiles.get(tableName);
-        return tf != null ? tf.getPageCount() : 0;
+        // computeIfAbsent：重启后的新 pool tableFiles 为空，TableFile 构造器会从磁盘文件长度恢复 pageCount
+        return getTableFile(tableName).getPageCount();
     }
 
-    public Set<Integer> getCacheContent() {
+    public Set<String> getCacheContent() {
         return new HashSet<>(cache.keySet());
     }
 
@@ -187,8 +189,9 @@ public class DiskBufferPool implements BufferPool {
         if (closed) {
             return;
         }
-        closed = true;
+        // 必须先刷盘再置 closed：flushAll 开头有 if(closed) return，顺序反了会导致脏页永远不落盘
         flushAll();
+        closed = true;
         for (TableFile tf : tableFiles.values()) {
             tf.close();
         }
@@ -266,7 +269,7 @@ public class DiskBufferPool implements BufferPool {
                 long offset = (long) pageId * (Page.PAGE_SIZE + Page.DISK_PREFIX_SIZE);
                 raf.seek(offset);
 
-                int slotCount = page.getSlotCount();
+                int slotCount = page.slotCount();
                 byte[] prefix = new byte[Page.DISK_PREFIX_SIZE];
                 prefix[0] = (byte) (slotCount >> 24);
                 prefix[1] = (byte) (slotCount >> 16);
@@ -285,7 +288,7 @@ public class DiskBufferPool implements BufferPool {
             try {
                 raf.seek(raf.length());
 
-                int slotCount = page.getSlotCount();
+                int slotCount = page.slotCount();
                 byte[] prefix = new byte[Page.DISK_PREFIX_SIZE];
                 prefix[0] = (byte) (slotCount >> 24);
                 prefix[1] = (byte) (slotCount >> 16);

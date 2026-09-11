@@ -37,10 +37,6 @@ build/
 ### Mac OS ###
 .DS_Store
 
-<<<<<<< HEAD
 /docs
 AGENTS.md
-=======
-### MiniDB data directory ###
->>>>>>> origin/D4-D-aggregate-function
 /data

@@ -45,3 +45,6 @@ WHERE score >= 90.0
 
 -- 10. INSERT（空字符串，补充INSERT覆盖）
 INSERT INTO student VALUES (3, '', 77.7);
+
+-- 11. SELECT DISTINCT（D4 新增关键字覆盖）
+SELECT DISTINCT name FROM student;

@@ -11,7 +11,7 @@ import java.util.Map;
 /**
  * 逐字符扫描的 SQL 词法分析器。
  *
- * <p>支持：大小写不敏感关键字（15 个 KW_*）、标识符、INT/FLOAT/STRING 字面量、
+ * <p>支持：大小写不敏感关键字（27 个 KW_*，D5 M0 冻结）、标识符、INT/FLOAT/STRING 字面量、
  * 单行(--)与多行(/* *&#47;)注释、双字符运算符(>= <= != ==)、单字符运算符与分隔符、
  * 1 起始的 line/column 位置记录，以及按统一 MiniDbException(Phase.LEXER) 报错。
  *
@@ -20,7 +20,7 @@ import java.util.Map;
  */
 public class Lexer {
 
-    /** 全部关键字（小写 -> TokenType），查找时大小写不敏感。 */
+    /** 全部关键字（小写 -> TokenType），查找时大小写不敏感。D5 M0 冻结为 27 个。 */
     private static final Map<String, TokenType> KEYWORDS = Map.ofEntries(
             Map.entry("create", TokenType.KW_CREATE),
             Map.entry("table", TokenType.KW_TABLE),
@@ -36,7 +36,19 @@ public class Lexer {
             Map.entry("not", TokenType.KW_NOT),
             Map.entry("int", TokenType.KW_INT),
             Map.entry("float", TokenType.KW_FLOAT),
-            Map.entry("varchar", TokenType.KW_VARCHAR));
+            Map.entry("varchar", TokenType.KW_VARCHAR),
+            Map.entry("distinct", TokenType.KW_DISTINCT),
+            Map.entry("update", TokenType.KW_UPDATE),
+            Map.entry("set", TokenType.KW_SET),
+            Map.entry("order", TokenType.KW_ORDER),
+            Map.entry("by", TokenType.KW_BY),
+            Map.entry("group", TokenType.KW_GROUP),
+            Map.entry("join", TokenType.KW_JOIN),
+            Map.entry("on", TokenType.KW_ON),
+            Map.entry("null", TokenType.KW_NULL),
+            Map.entry("is", TokenType.KW_IS),
+            Map.entry("asc", TokenType.KW_ASC),
+            Map.entry("desc", TokenType.KW_DESC));
 
     private String sql;
     private int length;

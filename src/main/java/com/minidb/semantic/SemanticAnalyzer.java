@@ -12,6 +12,7 @@ import com.minidb.ast.Literal;
 import com.minidb.ast.SelectStmt;
 import com.minidb.ast.Statement;
 import com.minidb.ast.UnaryExpr;
+import com.minidb.ast.UpdateStmt;
 import com.minidb.catalog.Catalog;
 import com.minidb.catalog.ColumnDef;
 import com.minidb.catalog.TableDef;
@@ -41,6 +42,9 @@ public class SemanticAnalyzer {
     /** VARCHAR 的 2B 长度上限（RowEncoder putShort），超限会在编码时溢出。 */
     private static final int MAX_VARCHAR_LENGTH = 32767;
 
+    /** D4 拍板的五个标量聚合函数（func 已由 Parser 大写规范化）。 */
+    private static final Set<String> AGG_FUNCS = Set.of("COUNT", "SUM", "AVG", "MIN", "MAX");
+
     private final Catalog catalog;
 
     public SemanticAnalyzer(Catalog catalog) {
@@ -54,6 +58,9 @@ public class SemanticAnalyzer {
             case InsertStmt s -> checkInsert(s);
             case SelectStmt s -> checkSelect(s);
             case DeleteStmt s -> checkDelete(s);
+            // D5 M0 桩：UPDATE 语义检查（表/SET 列存在、值类型、WHERE 布尔）在并行阶段实现
+            case UpdateStmt s -> throw new MiniDbException(MiniDbException.Phase.SEMANTIC, s.pos(),
+                    "UPDATE 语义检查未实现（D5 并行阶段）");
         }
     }
 
@@ -80,17 +87,9 @@ public class SemanticAnalyzer {
                         MiniDbException.Phase.SEMANTIC, u.pos(),
                         "类型不匹配: " + u.op() + " " + ot));
             }
-<<<<<<< HEAD
-            // D4-A 编译契约适配：FuncCall 已进入 Expression permits。
-            // 聚合函数的类型检查属于 B 的 D4 任务，这里只做“尚未支持”的最小占位。
-            case FuncCall f -> throw new MiniDbException(
-                    MiniDbException.Phase.SEMANTIC, f.pos(),
-                    "聚合函数语义尚未支持: " + f.func());
-=======
-            case FuncCall fc -> throw new MiniDbException(
-                    MiniDbException.Phase.SEMANTIC, fc.pos(),
-                    "聚合函数不能出现在 WHERE 条件中");
->>>>>>> origin/D4-D-aggregate-function
+            // 顶层聚合类型由 checkAggregates/TypeRules.aggregate 管；此处到达 = 嵌套聚合（SUM(COUNT(x))）
+            case FuncCall f -> throw new MiniDbException(MiniDbException.Phase.SEMANTIC, f.pos(),
+                    "嵌套聚合函数不支持: " + f.display());
         };
     }
 
@@ -167,6 +166,8 @@ public class SemanticAnalyzer {
             case FLOAT -> lit.type() == DataType.INT || lit.type() == DataType.FLOAT;
             case VARCHAR -> lit.type() == DataType.VARCHAR;
             case BOOLEAN -> false;
+            // NULL 与 BOOLEAN 同为先例：仅字面量语义类型，不能作列类型（建表时 Parser 已拒绝）
+            case NULL -> false;
         };
         if (!ok) {
             throw new MiniDbException(MiniDbException.Phase.SEMANTIC, lit.pos(),
@@ -181,94 +182,72 @@ public class SemanticAnalyzer {
     private void checkSelect(SelectStmt s) throws MiniDbException {
         TableDef table = requireTable(s.tableName(), s.pos());
         if (s.columns() != null) {
-<<<<<<< HEAD
-            for (Expression col : s.columns()) {
-                if (col instanceof ColumnRef c) {
-                    resolveColumn(table.tableName(), c); // 纯存在性检查；SELECT * 的展开归 Planner
-                } else {
-                    // D4-A 编译契约适配：SELECT 列表现已可承载表达式（FuncCall）。
-                    // 聚合的混写/类型规则由 B 的 D4 任务实现，这里仅最小占位。
-                    throw new MiniDbException(MiniDbException.Phase.SEMANTIC, col.pos(),
-                            "聚合函数语义尚未支持: " + col);
-                }
-=======
-            // 检查是否存在聚合函数
-            boolean hasAggregate = false;
-            boolean hasPlainColumn = false;
-            for (Expression expr : s.columns()) {
-                if (expr instanceof FuncCall fc) {
-                    hasAggregate = true;
-                    checkAggregateFunc(fc, table.tableName());
-                } else if (expr instanceof ColumnRef ref) {
-                    hasPlainColumn = true;
-                    resolveColumnType(table.tableName(), ref);
-                }
-            }
-            // 聚合与普通列不能混写
-            if (hasAggregate && hasPlainColumn) {
-                throw new MiniDbException(MiniDbException.Phase.SEMANTIC, s.pos(),
-                        "聚合函数与普通列不能混写（不支持 GROUP BY）");
->>>>>>> origin/D4-D-aggregate-function
+            for (ColumnRef c : s.columns()) {
+                resolveColumn(table.tableName(), c); // 纯存在性检查；SELECT * 的展开归 Planner
             }
         }
+        if (s.aggregates() != null) {
+            checkAggregates(s, table);
+        }
         if (s.where() != null) {
+            rejectAggregateInWhere(s.where());
             requireBooleanWhere(s.where(), table.tableName());
         }
     }
 
-    /** 聚合函数语义检查：函数名合法性、COUNT(*) 无参数、其他函数参数必须是列引用且类型合法。 */
-    private void checkAggregateFunc(FuncCall fc, String tableName) throws MiniDbException {
-        String func = fc.func().toLowerCase();
-        switch (func) {
-            case "count":
-                // COUNT(*) 时 arg == null；COUNT(col) 时 arg 必须是列引用
-                if (fc.arg() != null && !(fc.arg() instanceof ColumnRef)) {
-                    throw new MiniDbException(MiniDbException.Phase.SEMANTIC, fc.pos(),
-                            "COUNT 参数必须是列引用");
-                }
-                if (fc.arg() instanceof ColumnRef ref) {
-                    resolveColumnType(tableName, ref);
-                }
-                break;
-            case "sum", "avg":
-                requireColumnArg(fc, tableName);
-                // SUM/AVG 参数必须是数值类型
-                if (fc.arg() instanceof ColumnRef ref) {
-                    DataType colType = resolveColumnType(tableName, ref);
-                    if (colType != DataType.INT && colType != DataType.FLOAT) {
-                        throw new MiniDbException(MiniDbException.Phase.SEMANTIC, fc.pos(),
-                                func.toUpperCase() + " 参数必须是数值类型, 实际: " + colType);
-                    }
-                }
-                break;
-            case "min", "max":
-                requireColumnArg(fc, tableName);
-                if (fc.arg() instanceof ColumnRef ref) {
-                    resolveColumnType(tableName, ref);
-                }
-                break;
-            default:
-                throw new MiniDbException(MiniDbException.Phase.SEMANTIC, fc.pos(),
-                        "未知函数: " + fc.func());
+    /** 聚合四查（D4 拍板）：混写普通列 / 未知函数 / 非 COUNT 用 * / 参数类型不支持。 */
+    private void checkAggregates(SelectStmt s, TableDef table) throws MiniDbException {
+        if (s.columns() != null) {
+            throw new MiniDbException(MiniDbException.Phase.SEMANTIC, s.aggregates().get(0).pos(),
+                    "聚合函数不能与普通列混写: " + s.aggregates().get(0).display());
         }
-    }
-
-    private void requireColumnArg(FuncCall fc, String tableName) throws MiniDbException {
-        if (fc.arg() == null) {
-            throw new MiniDbException(MiniDbException.Phase.SEMANTIC, fc.pos(),
-                    fc.func().toUpperCase() + " 不支持 * 参数");
-        }
-        if (!(fc.arg() instanceof ColumnRef)) {
-            throw new MiniDbException(MiniDbException.Phase.SEMANTIC, fc.pos(),
-                    fc.func().toUpperCase() + " 参数必须是列引用");
+        for (FuncCall f : s.aggregates()) {
+            if (!AGG_FUNCS.contains(f.func())) {
+                throw new MiniDbException(MiniDbException.Phase.SEMANTIC, f.pos(),
+                        "未知聚合函数: " + f.func());
+            }
+            if (f.arg() == null && !"COUNT".equals(f.func())) {
+                throw new MiniDbException(MiniDbException.Phase.SEMANTIC, f.pos(),
+                        "只有 COUNT 支持 *: " + f.func());
+            }
+            if (f.arg() != null) {
+                DataType argType = infer(f.arg(), table.tableName()); // arg 内列存在性/类型，错误自带 pos
+                TypeRules.aggregate(f.func(), argType).orElseThrow(() ->
+                        new MiniDbException(MiniDbException.Phase.SEMANTIC, f.pos(),
+                                "聚合参数类型不支持: " + f.func() + "(" + argType + ")"));
+            }
         }
     }
 
     private void checkDelete(DeleteStmt s) throws MiniDbException {
         requireTable(s.tableName(), s.pos());
         if (s.where() != null) {
+            rejectAggregateInWhere(s.where());
             requireBooleanWhere(s.where(), s.tableName());
         }
+    }
+
+    /** 聚合出现在 WHERE/DELETE 条件：报 SEMANTIC（pos 定位到聚合函数名）。 */
+    private void rejectAggregateInWhere(Expression where) throws MiniDbException {
+        FuncCall agg = findAggregate(where);
+        if (agg != null) {
+            throw new MiniDbException(MiniDbException.Phase.SEMANTIC, agg.pos(),
+                    "聚合函数不允许出现在 WHERE 中: " + agg.display());
+        }
+    }
+
+    private static FuncCall findAggregate(Expression expr) {
+        if (expr instanceof BinaryExpr b) {
+            FuncCall left = findAggregate(b.left());
+            return left != null ? left : findAggregate(b.right());
+        }
+        if (expr instanceof UnaryExpr u) {
+            return findAggregate(u.operand());
+        }
+        if (expr instanceof FuncCall f) {
+            return f;
+        }
+        return null;
     }
 
     private void requireBooleanWhere(Expression where, String tableName) throws MiniDbException {

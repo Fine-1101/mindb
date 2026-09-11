@@ -46,7 +46,8 @@ public final class TypeRules {
                 ? Optional.of(DataType.BOOLEAN) : Optional.empty();
     }
 
-    /** 一元运算：NOT(BOOLEAN)→BOOLEAN；NEG(INT)→INT；NEG(FLOAT)→FLOAT；其余 → empty。 */
+    /** 一元运算：NOT(BOOLEAN)→BOOLEAN；NEG(INT)→INT；NEG(FLOAT)→FLOAT；
+     *  IS_NULL/IS_NOT_NULL 任意类型→BOOLEAN（D5 拍板 8，并行阶段接线）；其余 → empty。 */
     public static Optional<DataType> unary(UnaryOp op, DataType operand) {
         return switch (op) {
             case NOT -> operand == DataType.BOOLEAN
@@ -56,6 +57,29 @@ public final class TypeRules {
                 case FLOAT -> Optional.of(DataType.FLOAT);
                 default -> Optional.empty();
             };
+            case IS_NULL, IS_NOT_NULL -> Optional.of(DataType.BOOLEAN);
+        };
+    }
+
+    /**
+     * 聚合函数结果类型（D4 拍板）：COUNT→INT（arg 任意或 *）；SUM 同参型数值；
+     * AVG(INT/FLOAT)→FLOAT；MIN/MAX(T)→T（数值或 VARCHAR）。未知函数/不支持参数 → empty。
+     *
+     * <p>COUNT 的 arg 可为 null（COUNT(*)），本方法不读 arg 值。
+     */
+    public static Optional<DataType> aggregate(String func, DataType arg) {
+        return switch (func) {
+            case "COUNT" -> Optional.of(DataType.INT);
+            case "SUM" -> switch (arg) {
+                case INT -> Optional.of(DataType.INT);
+                case FLOAT -> Optional.of(DataType.FLOAT);
+                default -> Optional.empty();
+            };
+            case "AVG" -> arg == DataType.INT || arg == DataType.FLOAT
+                    ? Optional.of(DataType.FLOAT) : Optional.empty();
+            case "MIN", "MAX" -> arg == DataType.INT || arg == DataType.FLOAT || arg == DataType.VARCHAR
+                    ? Optional.of(arg) : Optional.empty();
+            default -> Optional.empty();
         };
     }
 }

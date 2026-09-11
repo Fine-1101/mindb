@@ -161,4 +161,37 @@ class DiskEndToEndTest {
         assertEquals("x", rowsB.get(0)[0]);
         assertEquals("z", rowsB.get(2)[0]);
     }
+
+    @Test
+    void cliCloseFlushesRowData() {
+        // 回归：CLI 退出路径（MiniDB.main）曾从不关闭池——newPage 只写空页、行数据全在缓存，
+        // 重启后只剩表结构。锁定 MiniDB.close() 后行数据可恢复。
+        java.io.PrintStream originalOut = System.out;
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        System.setOut(new java.io.PrintStream(baos));
+        com.minidb.MiniDB db = null;
+        com.minidb.MiniDB restarted = null;
+        try {
+            db = new com.minidb.MiniDB(true);
+            db.executeSql("CREATE TABLE " + TEST_TABLE + " (id INT, name VARCHAR(50))");
+            db.executeSql("INSERT INTO " + TEST_TABLE + " VALUES (1, 'Tom'), (2, 'Alice')");
+            db.close();  // 模拟 exit/脚本结束的退出刷盘
+
+            // "重启"：全新 MiniDB（构造器内 recoverFromDisk），行数据应从磁盘恢复
+            restarted = new com.minidb.MiniDB(true);
+            restarted.executeSql("SELECT id, name FROM " + TEST_TABLE);
+        } finally {
+            System.setOut(originalOut);
+            if (db != null) {
+                db.close();  // 幂等；Windows 下必须释放句柄否则 tearDown 删文件失败
+            }
+            if (restarted != null) {
+                restarted.close();
+            }
+        }
+
+        String out = baos.toString();
+        assertTrue(out.contains("Tom"), "重启后应恢复行数据 Tom，实际输出: " + out);
+        assertTrue(out.contains("Alice"), "重启后应恢复行数据 Alice，实际输出: " + out);
+    }
 }

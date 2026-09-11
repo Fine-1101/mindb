@@ -8,11 +8,17 @@ public interface PlanVisitor<R> {
 
     R visit(Project node);
 
+    R visit(AggregatePlan node);
+
     R visit(CreateTablePlan node);
 
     R visit(InsertPlan node);
 
     R visit(DeletePlan node);
 
-    R visit(AggregatePlan node);
+    R visit(UpdatePlan node);
+
+    R visit(SortPlan node);
+
+    R visit(JoinPlan node);
 }

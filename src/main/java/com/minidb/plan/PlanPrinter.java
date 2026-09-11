@@ -4,6 +4,7 @@ import com.minidb.ast.BinaryExpr;
 import com.minidb.ast.BinaryOp;
 import com.minidb.ast.ColumnRef;
 import com.minidb.ast.Expression;
+import com.minidb.ast.FuncCall;
 import com.minidb.ast.Literal;
 import com.minidb.ast.UnaryExpr;
 import com.minidb.common.DataType;
@@ -30,7 +31,9 @@ public class PlanPrinter implements PlanVisitor<String> {
 
     @Override
     public String visit(SeqScan node) {
-        return "(SeqScan " + node.tableName() + ")";
+        // cols = 规则4（投影裁剪）标注的引用列集；null = 全部列（未标注 / SELECT *）
+        return node.cols() == null ? "(SeqScan " + node.tableName() + ")"
+                : "(SeqScan " + node.tableName() + "{cols: " + String.join(", ", node.cols()) + "})";
     }
 
     @Override
@@ -40,7 +43,39 @@ public class PlanPrinter implements PlanVisitor<String> {
 
     @Override
     public String visit(Project node) {
-        return "(Project " + node.child().accept(this) + " " + columns(node.columns()) + ")";
+        return "(Project" + (node.distinct() ? " distinct" : "") + " "
+                + node.child().accept(this) + " " + columns(node.columns()) + ")";
+    }
+
+    @Override
+    public String visit(AggregatePlan node) {
+        String aggs = node.aggregates().stream().map(FuncCall::display)
+                .reduce((a, b) -> a + ", " + b).orElse("");
+        String by = node.groupBy() == null ? "" : " by " + node.groupBy();
+        return "(Aggregate " + node.input().accept(this) + " [" + aggs + "]" + by + ")";
+    }
+
+    @Override
+    public String visit(UpdatePlan node) {
+        String sets = node.sets().stream()
+                .map(s -> s.column().column() + " = " + expr(s.value()))
+                .reduce((a, b) -> a + ", " + b).orElse("");
+        String condition = node.condition() == null ? "*" : expr(node.condition());
+        return "(Update " + node.tableName() + " [" + sets + "] " + condition + ")";
+    }
+
+    @Override
+    public String visit(SortPlan node) {
+        String keys = node.keys().stream()
+                .map(k -> k.column() + (k.asc() ? " ASC" : " DESC"))
+                .reduce((a, b) -> a + ", " + b).orElse("");
+        return "(Sort " + node.child().accept(this) + " [" + keys + "])";
+    }
+
+    @Override
+    public String visit(JoinPlan node) {
+        return "(Join " + node.left().accept(this) + " " + node.right().accept(this)
+                + " ON " + expr(node.condition()) + ")";
     }
 
     @Override
@@ -96,6 +131,9 @@ public class PlanPrinter implements PlanVisitor<String> {
         }
         if (e instanceof BinaryExpr bin) {
             return "(" + symbol(bin.op()) + " " + expr(bin.left()) + " " + expr(bin.right()) + ")";
+        }
+        if (e instanceof FuncCall f) {
+            return "(" + f.func() + " " + (f.arg() == null ? "*" : expr(f.arg())) + ")";
         }
         UnaryExpr un = (UnaryExpr) e;
         return "(" + un.op() + " " + expr(un.operand()) + ")";

@@ -105,11 +105,11 @@ public class LexerTest {
     }
 
     // ==================================================================
-    // 15 个 KW_* 全部识别 + 关键字优先于标识符
+    // 16 个 KW_* 全部识别 + 关键字优先于标识符
     // ==================================================================
 
     @Test
-    public void testAllFifteenKeywordsRecognized() throws Exception {
+    public void testAllSixteenKeywordsRecognized() throws Exception {
         Set<TokenType> seen = EnumSet.noneOf(TokenType.class);
         for (TokenType type : TokenType.values()) {
             if (type.name().startsWith("KW_")) {
@@ -126,8 +126,8 @@ public class LexerTest {
                 seen.add(type);
             }
         }
-        // 确保 15 个关键字确实被遍历到（防止以后枚举新增漏测）
-        assertEquals(15, seen.size());
+        // 确保 27 个关键字确实被遍历到（防止以后枚举新增漏测；D4 加入 DISTINCT，D5 M0 加入 11 个）
+        assertEquals(27, seen.size());
     }
 
     @Test
@@ -531,19 +531,19 @@ public class LexerTest {
         assertNotNull(sql, "samples.sql 资源不存在");
         List<Token> tokens = lex(sql);
 
-        // 整份文件可以切分：末尾为 EOF；恰好 10 条语句 => 10 个分号
+        // 整份文件可以切分：末尾为 EOF；恰好 11 条语句 => 11 个分号
         assertEquals(TokenType.EOF, tok(tokens, tokens.size() - 1).type());
         long semiCount = tokens.stream().filter(t -> t.type() == TokenType.SEMI).count();
-        assertEquals(10, semiCount);
+        assertEquals(11, semiCount);
 
-        // 15 个关键字在样例中全部出现且被正确识别
+        // 16 个关键字在样例中全部出现且被正确识别（D4 加入 DISTINCT）
         Set<TokenType> keywordTypes = EnumSet.noneOf(TokenType.class);
         for (Token t : tokens) {
             if (t.type().name().startsWith("KW_")) {
                 keywordTypes.add(t.type());
             }
         }
-        assertEquals(15, keywordTypes.size());
+        assertEquals(16, keywordTypes.size());
 
         // 转义字符串、中文、空字符串的字面量值正确
         boolean sawEscaped = false;

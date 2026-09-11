@@ -92,6 +92,7 @@ public class MiniDB {
         // --script 模式（--script demo.sql，可与 --disk 组合）
         if (scriptPath != null) {
             db.runScript(scriptPath);
+            db.close();
             return;
         }
 
@@ -128,6 +129,16 @@ public class MiniDB {
             }
         } catch (IOException e) {
             System.err.println("Error reading input: " + e.getMessage());
+        } finally {
+            // 磁盘模式退出前刷盘：不 close 则脏页永不落盘（newPage 只写空页，行数据全在缓存）
+            db.close();
+        }
+    }
+
+    /** 关闭数据库：磁盘模式 flushAll + 释放文件句柄；内存模式无操作。幂等可重复调用。 */
+    public void close() {
+        if (pool instanceof DiskBufferPool dp) {
+            dp.close();
         }
     }
 
@@ -155,8 +166,8 @@ public class MiniDB {
         PlanNode plan = planner.plan(stmt);
         PlanNode optimized = optimizer.optimize(plan);
 
-        if (stmt instanceof SelectStmt selectStmt) {
-            List<Object[]> results = engine.executeQuery(optimized, selectStmt);
+        if (stmt instanceof SelectStmt) {
+            List<Object[]> results = engine.executeQuery(optimized);
             List<String> colNames = engine.getQueryColumnNames(optimized);
             printResultTable(colNames, results);
         } else {
@@ -209,8 +220,8 @@ public class MiniDB {
 
                 // 5. 执行结果
                 System.out.println("── Result ──");
-                if (stmt instanceof SelectStmt selectStmt) {
-                    List<Object[]> results = engine.executeQuery(optimized, selectStmt);
+                if (stmt instanceof SelectStmt) {
+                    List<Object[]> results = engine.executeQuery(optimized);
                     List<String> colNames = engine.getQueryColumnNames(optimized);
                     printResultTable(colNames, results);
                 } else {
@@ -221,6 +232,8 @@ public class MiniDB {
                         System.out.println("插入 " + s.rows().size() + " 行");
                     } else if (stmt instanceof DeleteStmt) {
                         System.out.println("删除完成");
+                    } else if (stmt instanceof UpdateStmt) {
+                        System.out.println("更新完成");
                     }
                 }
             }
@@ -329,26 +342,45 @@ public class MiniDB {
         switch (plan) {
             case Project p -> {
                 String cols = p.columns() != null ? String.join(",", p.columns()) : "*";
-                System.out.println(indent + "Project[" + cols + "]");
+                System.out.println(indent + "Project[" + (p.distinct() ? "distinct " : "") + cols + "]");
                 printPlanTree(p.child(), indent + "  ");
+            }
+            case AggregatePlan a -> {
+                String aggs = a.aggregates().stream().map(FuncCall::display)
+                        .reduce((x, y) -> x + "," + y).orElse("");
+                System.out.println(indent + "Aggregate[" + aggs + "]");
+                printPlanTree(a.input(), indent + "  ");
             }
             case Filter f -> {
                 System.out.println(indent + "Filter[" + exprToString(f.condition()) + "]");
                 printPlanTree(f.child(), indent + "  ");
             }
-            case SeqScan s -> System.out.println(indent + "SeqScan(" + s.tableName() + ")");
+            case SeqScan s -> System.out.println(indent + "SeqScan(" + s.tableName()
+                    + (s.cols() == null ? "" : "{cols:" + String.join(",", s.cols()) + "}") + ")");
             case CreateTablePlan p -> System.out.println(indent + "CreateTable(" + p.table().tableName() + ")");
             case InsertPlan p -> System.out.println(indent + "Insert(" + p.tableName() + ", " + p.rows().size() + " rows)");
             case DeletePlan p -> {
                 String cond = p.condition() != null ? exprToString(p.condition()) : "ALL";
                 System.out.println(indent + "Delete(" + p.tableName() + ", " + cond + ")");
             }
-            case AggregatePlan ap -> {
-                String funcs = ap.aggregates().stream()
-                        .map(fc -> fc.func().toLowerCase() + "(" + (fc.arg() != null ? exprToString(fc.arg()) : "*") + ")")
-                        .reduce("", (a, b) -> a.isEmpty() ? b : a + "," + b);
-                System.out.println(indent + "Aggregate[" + funcs + "]");
-                printPlanTree(ap.input(), indent + "  ");
+            case UpdatePlan p -> {
+                String sets = p.sets().stream()
+                        .map(s -> s.column().column() + "=" + exprToString(s.value()))
+                        .reduce((a, b) -> a + "," + b).orElse("");
+                String cond = p.condition() != null ? exprToString(p.condition()) : "ALL";
+                System.out.println(indent + "Update(" + p.tableName() + ", [" + sets + "], " + cond + ")");
+            }
+            case SortPlan p -> {
+                String keys = p.keys().stream()
+                        .map(k -> k.column() + (k.asc() ? " ASC" : " DESC"))
+                        .reduce((a, b) -> a + "," + b).orElse("");
+                System.out.println(indent + "Sort[" + keys + "]");
+                printPlanTree(p.child(), indent + "  ");
+            }
+            case JoinPlan p -> {
+                System.out.println(indent + "Join[on " + exprToString(p.condition()) + "]");
+                printPlanTree(p.left(), indent + "  ");
+                printPlanTree(p.right(), indent + "  ");
             }
         }
     }
@@ -364,17 +396,24 @@ public class MiniDB {
                     + ")";
             case InsertStmt s -> "(insert " + s.tableName() + " " + s.rows().size() + " rows)";
             case SelectStmt s -> {
-                StringBuilder sb = new StringBuilder("(select");
-                if (s.distinct()) sb.append(" distinct");
-                sb.append(" ");
-                if (s.columns() == null) {
+                StringBuilder sb = new StringBuilder("(select ");
+                if (s.distinct()) {
+                    sb.append("distinct ");
+                }
+                if (s.columns() == null && s.aggregates() == null) {
                     sb.append("*");
                 } else {
-<<<<<<< HEAD
-                    sb.append(s.columns().stream().map(this::selectItemToSExpr).reduce("", (a, b) -> a + " " + b).trim());
-=======
-                    sb.append(s.columns().stream().map(this::exprToSExpr).reduce("", (a, b) -> a + " " + b).trim());
->>>>>>> origin/D4-D-aggregate-function
+                    if (s.columns() != null) {
+                        sb.append(s.columns().stream().map(c -> "(col " + c.column() + ")")
+                                .reduce((a, b) -> a + " " + b).orElse(""));
+                    }
+                    if (s.aggregates() != null) {
+                        if (s.columns() != null) {
+                            sb.append(" ");
+                        }
+                        sb.append(s.aggregates().stream().map(f -> "(agg " + f.display() + ")")
+                                .reduce((a, b) -> a + " " + b).orElse(""));
+                    }
                 }
                 sb.append(" (from ").append(s.tableName()).append(")");
                 if (s.where() != null) {
@@ -391,18 +430,19 @@ public class MiniDB {
                 sb.append(")");
                 yield sb.toString();
             }
+            case UpdateStmt s -> {
+                StringBuilder sb = new StringBuilder("(update " + s.tableName() + " (set ");
+                sb.append(s.sets().stream()
+                        .map(c -> "(col " + c.column().column() + ") " + exprToSExpr(c.value()))
+                        .reduce((a, b) -> a + " " + b).orElse(""));
+                sb.append(")");
+                if (s.where() != null) {
+                    sb.append(" (where ").append(exprToSExpr(s.where())).append(")");
+                }
+                sb.append(")");
+                yield sb.toString();
+            }
         };
-    }
-
-    /**
-     * D4-A 编译契约适配：SELECT 列表元素已由 ColumnRef 放宽为 Expression。
-     * 这里只保留普通列的原有 S 表达式输出；聚合函数输出由 D 的 D4 任务实现。
-     */
-    private String selectItemToSExpr(Expression expr) {
-        if (expr instanceof ColumnRef ref) {
-            return "(col " + ref.column() + ")";
-        }
-        return "(func ...)";
     }
 
     private String exprToSExpr(Expression expr) {
@@ -411,13 +451,7 @@ public class MiniDB {
             case ColumnRef ref -> "(col " + ref.column() + ")";
             case BinaryExpr b -> "(" + b.op() + " " + exprToSExpr(b.left()) + " " + exprToSExpr(b.right()) + ")";
             case UnaryExpr u -> "(" + u.op() + " " + exprToSExpr(u.operand()) + ")";
-<<<<<<< HEAD
-            // D4-A 编译契约适配：聚合打印由 D 的 D4 任务实现，这里仅占位。
-            case FuncCall f -> "(func " + f.func() + " ...)";
-=======
-            case FuncCall fc -> "(" + fc.func().toLowerCase() + " "
-                    + (fc.arg() != null ? exprToSExpr(fc.arg()) : "*") + ")";
->>>>>>> origin/D4-D-aggregate-function
+            case FuncCall f -> "(agg " + f.display() + ")";
         };
     }
 
@@ -427,13 +461,7 @@ public class MiniDB {
             case ColumnRef ref -> ref.column();
             case BinaryExpr b -> exprToString(b.left()) + " " + b.op() + " " + exprToString(b.right());
             case UnaryExpr u -> u.op() + " " + exprToString(u.operand());
-<<<<<<< HEAD
-            // D4-A 编译契约适配：聚合打印由 D 的 D4 任务实现，这里仅占位。
-            case FuncCall f -> f.func() + "(...)";
-=======
-            case FuncCall fc -> fc.func().toLowerCase() + "("
-                    + (fc.arg() != null ? exprToString(fc.arg()) : "*") + ")";
->>>>>>> origin/D4-D-aggregate-function
+            case FuncCall f -> f.display();
         };
     }
 

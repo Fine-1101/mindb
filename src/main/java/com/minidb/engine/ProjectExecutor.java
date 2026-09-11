@@ -4,14 +4,17 @@ import com.minidb.common.MiniDbException;
 
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 投影执行器：列裁剪。columns 为 null 整行透传（SELECT *）。
  * 否则按 columns 指定的列名从子执行器输出中提取对应列。
- * 支持 DISTINCT：使用 LinkedHashSet 保序去重。
+ *
+ * <p>distinct 为 SELECT DISTINCT 的行值去重（拍板：流式 next 逐行判重，
+ * 输出天然保持输入序；值相等 = 投影后整行相等）。
  */
 public class ProjectExecutor implements Executor {
 
@@ -19,9 +22,7 @@ public class ProjectExecutor implements Executor {
     private final List<String> columns;  // null = 透传全部列
     private final int[] indices;         // 投影列在子输出中的索引（columns != null 时有效）
     private final boolean distinct;
-
-    // DISTINCT 去重集合（保序）
-    private LinkedHashSet<List<Object>> seen;
+    private final Set<List<Object>> seen = new HashSet<>();
 
     /**
      * @param child         子执行器
@@ -33,12 +34,10 @@ public class ProjectExecutor implements Executor {
     }
 
     /**
-     * @param child         子执行器
-     * @param columns       要投影的列名列表（null = SELECT *）
-     * @param childColumns  子执行器输出的列名列表（用于建立索引映射）
-     * @param distinct      是否去重
+     * @param distinct      SELECT DISTINCT 去重标记
      */
-    public ProjectExecutor(Executor child, List<String> columns, List<String> childColumns, boolean distinct) {
+    public ProjectExecutor(Executor child, List<String> columns, List<String> childColumns,
+                           boolean distinct) {
         this.child = child;
         this.columns = columns;
         this.distinct = distinct;
@@ -63,16 +62,13 @@ public class ProjectExecutor implements Executor {
     @Override
     public void open() throws MiniDbException {
         child.open();
-        if (distinct) {
-            seen = new LinkedHashSet<>();
-        }
+        seen.clear();
     }
 
     @Override
     public Object[] next() throws MiniDbException {
-        while (true) {
-            Object[] childRow = child.next();
-            if (childRow == null) return null;
+        Object[] childRow;
+        while ((childRow = child.next()) != null) {
             Object[] projected;
             if (columns == null || indices == null) {
                 projected = childRow;  // SELECT * 透传
@@ -82,14 +78,12 @@ public class ProjectExecutor implements Executor {
                     projected[i] = childRow[indices[i]];
                 }
             }
-            if (distinct) {
-                List<Object> key = Arrays.asList(projected);
-                if (!seen.add(key)) {
-                    continue;  // 重复行，跳过
-                }
+            if (distinct && !seen.add(Arrays.asList(projected))) {
+                continue;  // 重复行跳过，取下一行
             }
             return projected;
         }
+        return null;
     }
 
     @Override

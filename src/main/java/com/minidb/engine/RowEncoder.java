@@ -44,6 +44,7 @@ public final class RowEncoder {
                 case FLOAT -> 8;
                 case VARCHAR -> 2 + ((String) values[i]).getBytes(StandardCharsets.UTF_8).length;
                 case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不支持作为列类型");
+                case NULL -> throw new IllegalArgumentException("NULL 不支持作为列类型");
             };
         }
 
@@ -71,6 +72,7 @@ public final class RowEncoder {
                     buf.put(bytes);
                 }
                 case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不支持作为列类型");
+                case NULL -> throw new IllegalArgumentException("NULL 不支持作为列类型");
             }
         }
 
@@ -110,6 +112,7 @@ public final class RowEncoder {
                     yield new String(bytes, StandardCharsets.UTF_8);
                 }
                 case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不支持作为列类型");
+                case NULL -> throw new IllegalArgumentException("NULL 不支持作为列类型");
             };
         }
 

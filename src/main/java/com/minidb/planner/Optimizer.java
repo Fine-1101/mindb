@@ -2,12 +2,15 @@ package com.minidb.planner;
 
 import com.minidb.ast.BinaryExpr;
 import com.minidb.ast.BinaryOp;
+import com.minidb.ast.ColumnRef;
 import com.minidb.ast.Expression;
+import com.minidb.ast.FuncCall;
 import com.minidb.ast.Literal;
 import com.minidb.ast.UnaryExpr;
 import com.minidb.ast.UnaryOp;
 import com.minidb.common.DataType;
 import com.minidb.common.Position;
+import com.minidb.plan.AggregatePlan;
 import com.minidb.plan.CreateTablePlan;
 import com.minidb.plan.DeletePlan;
 import com.minidb.plan.Filter;
@@ -15,9 +18,15 @@ import com.minidb.plan.InsertPlan;
 import com.minidb.plan.PlanNode;
 import com.minidb.plan.Project;
 import com.minidb.plan.SeqScan;
+import com.minidb.plan.SortPlan;
+import com.minidb.plan.UpdatePlan;
+import com.minidb.plan.JoinPlan;
 import com.minidb.semantic.TypeRules;
 
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Optimizer：规则式优化（返回新树，不改输入）。
@@ -27,31 +36,121 @@ import java.util.Optional;
  *
  * <p>规则 2 布尔化简：x AND TRUE→x、x AND FALSE→FALSE、x OR FALSE→x、x OR TRUE→TRUE。
  *
- * <p>结构消除（P1）：条件折叠为 TRUE 的 Filter 节点整体消除（child 顶上）。
+ * <p>规则 3 Filter 合并：Filter(Filter(x,p),q) → Filter(x, q AND p)（Planner 不产嵌套 Filter，
+ * 作为可展示的等价变换规则，与手工构造计划互通）。
+ *
+ * <p>规则 4 投影裁剪：从 Project/AggregatePlan 顶层收集全树实际引用的列集，
+ * 标注到 SeqScan{cols}（SELECT * 透传不标注）。行式存储无列裁剪执行收益，
+ * 标注即"读了哪些列"的裁剪证明（.trace 演示载体）。
+ *
+ * <p>结构消除（P1）：条件折叠为 TRUE 的 Filter 节点整体消除（child 顶上）；
+ * SELECT * 的透传 Project 消除。
  * 条件统一处理：Filter.condition 与 DeletePlan.condition 都做折叠。
  * 折叠结果字面量的位置 = 被折叠表达式自己的位置。
  */
 public class Optimizer {
 
     public PlanNode optimize(PlanNode plan) {
+        return annotateColumns(rewrite(plan));
+    }
+
+    // ==================================================================
+    // 结构重写：规则 1/2/3 + 节点消除
+    // ==================================================================
+
+    private PlanNode rewrite(PlanNode plan) {
         return switch (plan) {
             case Filter filter -> {
-                PlanNode child = optimize(filter.child());
+                PlanNode child = rewrite(filter.child());
                 Expression condition = fold(filter.condition());
+                // 规则 3：Filter(Filter(x, p), q) → Filter(x, q AND p)（AND 可交换，结果等价）
+                if (child instanceof Filter inner) {
+                    condition = fold(new BinaryExpr(condition, BinaryOp.AND,
+                            inner.condition(), filter.condition().pos()));
+                    child = inner.child();
+                }
                 // P1：Filter(TRUE) 消除（恒真过滤冗余）
                 yield isTrue(condition) ? child : new Filter(child, condition);
             }
             case Project project -> {
                 // SELECT * 的透传 Project 删除（columns==null 表示透传全部列，消除后执行器整行输出）
-                PlanNode child = optimize(project.child());
-                yield project.columns() == null ? child : new Project(child, project.columns());
+                PlanNode child = rewrite(project.child());
+                yield project.columns() == null ? child
+                        : new Project(child, project.columns(), project.distinct());
             }
+            case AggregatePlan agg -> new AggregatePlan(rewrite(agg.input()), agg.aggregates(), agg.groupBy());
             case DeletePlan delete -> new DeletePlan(delete.tableName(),
                     delete.condition() == null ? null : fold(delete.condition()));
             case SeqScan scan -> scan;
             case CreateTablePlan create -> create;
             case InsertPlan insert -> insert;
+            // D5 新节点 M0 透传（编译安全占位）；并行阶段 B 换真实现（子树递归重写 + 规则4 覆盖）
+            case UpdatePlan update -> update;
+            case SortPlan sort -> sort;
+            case JoinPlan join -> join;
         };
+    }
+
+    // ==================================================================
+    // 规则 4 投影裁剪：引用列集收集并标注到 SeqScan
+    // ==================================================================
+
+    private PlanNode annotateColumns(PlanNode node) {
+        boolean prunable = (node instanceof Project p && p.columns() != null)
+                || node instanceof AggregatePlan;
+        if (!prunable) {
+            return node; // SELECT * 透传 / DML / DDL 不标注
+        }
+        Set<String> cols = new LinkedHashSet<>();
+        collectPlanColumns(node, cols);
+        return withScanCols(node, List.copyOf(cols));
+    }
+
+    private void collectPlanColumns(PlanNode node, Set<String> cols) {
+        if (node instanceof Project p) {
+            if (p.columns() != null) {
+                cols.addAll(p.columns());
+            }
+            collectPlanColumns(p.child(), cols);
+        } else if (node instanceof AggregatePlan a) {
+            for (FuncCall f : a.aggregates()) {
+                collectExprColumns(f.arg(), cols);
+            }
+            collectPlanColumns(a.input(), cols);
+        } else if (node instanceof Filter f) {
+            collectExprColumns(f.condition(), cols);
+            collectPlanColumns(f.child(), cols);
+        }
+        // SeqScan：终点
+    }
+
+    private void collectExprColumns(Expression expr, Set<String> cols) {
+        if (expr instanceof ColumnRef c) {
+            cols.add(c.column());
+        } else if (expr instanceof BinaryExpr b) {
+            collectExprColumns(b.left(), cols);
+            collectExprColumns(b.right(), cols);
+        } else if (expr instanceof UnaryExpr u) {
+            collectExprColumns(u.operand(), cols);
+        } else if (expr instanceof FuncCall f) {
+            collectExprColumns(f.arg(), cols);
+        }
+    }
+
+    private PlanNode withScanCols(PlanNode node, List<String> cols) {
+        if (node instanceof SeqScan s) {
+            return s.cols() == null ? new SeqScan(s.tableName(), cols) : s;
+        }
+        if (node instanceof Filter f) {
+            return new Filter(withScanCols(f.child(), cols), f.condition());
+        }
+        if (node instanceof Project p) {
+            return new Project(withScanCols(p.child(), cols), p.columns(), p.distinct());
+        }
+        if (node instanceof AggregatePlan a) {
+            return new AggregatePlan(withScanCols(a.input(), cols), a.aggregates(), a.groupBy());
+        }
+        return node;
     }
 
     // ==================================================================
@@ -97,6 +196,8 @@ public class Optimizer {
                     }
                     yield null;
                 }
+                // IS [NOT] NULL 谓词 M0 无折叠；并行阶段视需要处理字面量操作数
+                case IS_NULL, IS_NOT_NULL -> null;
             };
             if (folded != null) {
                 return folded;

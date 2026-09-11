@@ -92,21 +92,22 @@ class OptimizerTest {
 
     @Test
     void orTrueFoldsAwayFilter() throws MiniDbException {
-        // a OR TRUE → TRUE，且整条件为 TRUE 时 Filter 被 P1 规则消除（规则串联）
+        // a OR TRUE → TRUE，且整条件为 TRUE 时 Filter 被 P1 规则消除（规则串联）；
+        // 规则4 标注 SeqScan 引用列集 [a]
         PlanNode plan = planner.plan(parse("SELECT a FROM t WHERE a OR 1 = 1;"));
-        assertEquals(new Project(new SeqScan("t"), List.of("a")), optimizer.optimize(plan));
+        assertEquals(new Project(new SeqScan("t", List.of("a")), List.of("a")), optimizer.optimize(plan));
     }
 
     @Test
     void trueFilterRemoved() throws MiniDbException {
         PlanNode plan = planner.plan(parse("SELECT a FROM t WHERE 1 = 1;"));
-        assertEquals(new Project(new SeqScan("t"), List.of("a")), optimizer.optimize(plan));
+        assertEquals(new Project(new SeqScan("t", List.of("a")), List.of("a")), optimizer.optimize(plan));
     }
 
     @Test
     void negLiteralFoldedThenFilterRemoved() throws MiniDbException {
         PlanNode plan = planner.plan(parse("SELECT a FROM t WHERE -1 < 0;"));
-        assertEquals(new Project(new SeqScan("t"), List.of("a")), optimizer.optimize(plan));
+        assertEquals(new Project(new SeqScan("t", List.of("a")), List.of("a")), optimizer.optimize(plan));
     }
 
     @Test
@@ -121,7 +122,9 @@ class OptimizerTest {
     void idempotentOnPlainCondition() throws MiniDbException {
         Statement stmt = parse("SELECT a FROM t WHERE a = 2;");
         PlanNode plan = planner.plan(stmt);
-        assertEquals(plan, optimizer.optimize(plan));
+        // 条件本身无可折叠（assertEquals 比较），规则4 标注 SeqScan cols=[a] 为唯一差异
+        assertEquals(new Project(new Filter(new SeqScan("t", List.of("a")), ((SelectStmt) stmt).where()),
+                List.of("a")), optimizer.optimize(plan));
         assertSame(((SelectStmt) stmt).where(), filterOf(plan).condition());
     }
 

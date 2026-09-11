@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -206,7 +207,7 @@ class ParserTest {
     void insertWithColumnsAndMultipleRows() throws Exception {
         String sql = "INSERT INTO users (id, name) VALUES (1, 'Tom'), (2, 'Alice'), (3, '');";
         InsertStmt stmt = (InsertStmt) parse(sql);
-        assertEquals(List.of("id", "name"), stmt.columns().stream().map(e -> ((ColumnRef)e).column()).toList());
+        assertEquals(List.of("id", "name"), stmt.columns().stream().map(ColumnRef::column).toList());
         assertEquals(3, stmt.rows().size());
         // 三行值各自独立
         assertEquals(2, stmt.rows().get(0).size());
@@ -252,12 +253,7 @@ class ParserTest {
     void selectColumnListWithWhere() throws Exception {
         String sql = "SELECT id, name FROM student WHERE score >= 90.0;";
         SelectStmt stmt = (SelectStmt) parse(sql);
-<<<<<<< HEAD
-        assertEquals(List.of("id", "name"), stmt.columns().stream()
-                .map(e -> ((ColumnRef) e).column()).toList());
-=======
-        assertEquals(List.of("id", "name"), stmt.columns().stream().map(e -> ((ColumnRef)e).column()).toList());
->>>>>>> origin/D4-D-aggregate-function
+        assertEquals(List.of("id", "name"), stmt.columns().stream().map(ColumnRef::column).toList());
         assertEquals("student", stmt.tableName());
         // WHERE score >= 90.0
         assertEquals(BinaryOp.GE, ((BinaryExpr) stmt.where()).op());
@@ -273,6 +269,67 @@ class ParserTest {
         assertErrorPosition("SELECT * users", 2);             // users 处期望 FROM
         assertErrorPosition("SELECT * FROM", 3);              // EOF 处期望表名
         assertErrorPosition("SELECT * FROM t WHERE", 5);      // EOF 处期望表达式
+    }
+
+    // ==================================================================
+    // SELECT 聚合 + DISTINCT（D4）
+    // ==================================================================
+
+    @Test
+    void aggregateCountStar() throws Exception {
+        SelectStmt stmt = (SelectStmt) parse("SELECT COUNT(*) FROM student;");
+        assertNull(stmt.columns());
+        assertEquals(1, stmt.aggregates().size());
+        assertEquals("COUNT", stmt.aggregates().get(0).func());
+        assertNull(stmt.aggregates().get(0).arg());
+        assertFalse(stmt.distinct());
+    }
+
+    @Test
+    void aggregateListKeepsWrittenOrder() throws Exception {
+        SelectStmt stmt = (SelectStmt) parse("SELECT COUNT(*), SUM(score), AVG(score + 1), MIN(name), MAX(id) FROM student;");
+        assertNull(stmt.columns());
+        List<String> funcs = stmt.aggregates().stream().map(f -> f.func()).toList();
+        assertEquals(List.of("COUNT", "SUM", "AVG", "MIN", "MAX"), funcs);
+        // SUM(score) 参数为列引用
+        assertEquals("score", ((ColumnRef) stmt.aggregates().get(1).arg()).column());
+        // AVG(score + 1) 参数为算术表达式
+        assertEquals(BinaryOp.ADD, ((BinaryExpr) stmt.aggregates().get(2).arg()).op());
+    }
+
+    @Test
+    void aggregateFuncNameNormalizedUpperCase() throws Exception {
+        SelectStmt stmt = (SelectStmt) parse("select count(*), sum(score) from student;");
+        assertEquals("COUNT", stmt.aggregates().get(0).func());
+        assertEquals("SUM", stmt.aggregates().get(1).func());
+    }
+
+    @Test
+    void distinctFlagParsed() throws Exception {
+        SelectStmt distinct = (SelectStmt) parse("SELECT DISTINCT name FROM student;");
+        assertTrue(distinct.distinct());
+        assertEquals(List.of("name"), distinct.columns().stream().map(ColumnRef::column).toList());
+        assertNull(distinct.aggregates());
+
+        SelectStmt plain = (SelectStmt) parse("SELECT name FROM student;");
+        assertFalse(plain.distinct());
+    }
+
+    @Test
+    void mixedColumnsAndAggregatesParseable() throws Exception {
+        // 混写 Parser 不拒绝（columns 与 aggregates 并存），错误归 Semantic"聚合函数不能与普通列混写"
+        SelectStmt stmt = (SelectStmt) parse("SELECT name, COUNT(*) FROM student;");
+        assertEquals(List.of("name"), stmt.columns().stream().map(ColumnRef::column).toList());
+        assertEquals(1, stmt.aggregates().size());
+        assertEquals("COUNT", stmt.aggregates().get(0).func());
+    }
+
+    @Test
+    void aggregateInWhereParsesToFuncCall() throws Exception {
+        // WHERE 中的聚合 Parser 也生成 FuncCall（错误归 Semantic"聚合函数不允许出现在 WHERE 中"）
+        SelectStmt stmt = (SelectStmt) parse("SELECT name FROM student WHERE COUNT(id) > 1;");
+        BinaryExpr where = (BinaryExpr) stmt.where();
+        assertTrue(where.left() instanceof com.minidb.ast.FuncCall f && "COUNT".equals(f.func()));
     }
 
     // ==================================================================
@@ -498,12 +555,7 @@ class ParserTest {
 
         // 列名保留原始拼写
         SelectStmt withCol = (SelectStmt) parse("SELECT ID FROM Student;");
-<<<<<<< HEAD
-        assertEquals(List.of("ID"), withCol.columns().stream()
-                .map(e -> ((ColumnRef) e).column()).toList());
-=======
-        assertEquals(List.of("ID"), withCol.columns().stream().map(e -> ((ColumnRef)e).column()).toList());
->>>>>>> origin/D4-D-aggregate-function
+        assertEquals(List.of("ID"), withCol.columns().stream().map(ColumnRef::column).toList());
         assertEquals("Student", withCol.tableName());
     }
 
@@ -569,12 +621,7 @@ class ParserTest {
     void veryLongIdentifier() throws Exception {
         String longCol = "a" + "x".repeat(1000);
         SelectStmt stmt = (SelectStmt) parse("SELECT " + longCol + " FROM t;");
-<<<<<<< HEAD
-        assertEquals(List.of(longCol), stmt.columns().stream()
-                .map(e -> ((ColumnRef) e).column()).toList());
-=======
-        assertEquals(List.of(longCol), stmt.columns().stream().map(e -> ((ColumnRef)e).column()).toList());
->>>>>>> origin/D4-D-aggregate-function
+        assertEquals(List.of(longCol), stmt.columns().stream().map(ColumnRef::column).toList());
 
         CreateTableStmt create = (CreateTableStmt) parse(
                 "CREATE TABLE " + longCol + " (id INT);");
@@ -603,10 +650,11 @@ class ParserTest {
             sql = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
         }
         List<Statement> stmts = new Parser().parseScript(new Lexer().tokenize(sql));
-        assertEquals(10, stmts.size());
+        // 11 条（D4 追加 SELECT DISTINCT name FROM student）
+        assertEquals(11, stmts.size());
         assertEquals(2, stmts.stream().filter(s -> s instanceof CreateTableStmt).count());
         assertEquals(3, stmts.stream().filter(s -> s instanceof InsertStmt).count());
-        assertEquals(3, stmts.stream().filter(s -> s instanceof SelectStmt).count());
+        assertEquals(4, stmts.stream().filter(s -> s instanceof SelectStmt).count());
         assertEquals(2, stmts.stream().filter(s -> s instanceof DeleteStmt).count());
     }
 

@@ -1,12 +1,15 @@
 package com.minidb.engine;
 
 import com.minidb.ast.Expression;
+import com.minidb.ast.FuncCall;
 import com.minidb.ast.Literal;
+import com.minidb.ast.SelectStmt;
 import com.minidb.buffer.BufferPool;
 import com.minidb.catalog.Catalog;
 import com.minidb.catalog.ColumnDef;
 import com.minidb.catalog.TableDef;
 import com.minidb.common.MiniDbException;
+import com.minidb.plan.AggregatePlan;
 import com.minidb.plan.CreateTablePlan;
 import com.minidb.plan.DeletePlan;
 import com.minidb.plan.Filter;
@@ -63,15 +66,27 @@ public class Engine {
     /**
      * 执行查询计划节点，返回结果行集。
      *
-     * @param plan SELECT 计划树（Project → Filter → SeqScan 的任意组合）
+     * @param plan SELECT 计划树（Project → Filter → SeqScan 的任意组合，或 AggregatePlan）
      * @return 查询结果行集，每行为 Object[]
      * @throws MiniDbException 执行失败
      */
     public List<Object[]> executeQuery(PlanNode plan) throws MiniDbException {
-        // 从计划树构建执行器树
+        return executeQuery(plan, null);
+    }
+
+    /**
+     * 执行查询计划节点，返回结果行集（支持 DISTINCT）。
+     *
+     * @param plan     SELECT 计划树
+     * @param selectStmt 原始 SELECT AST（用于获取 DISTINCT 标志，可为 null）
+     * @return 查询结果行集，每行为 Object[]
+     * @throws MiniDbException 执行失败
+     */
+    public List<Object[]> executeQuery(PlanNode plan, SelectStmt selectStmt) throws MiniDbException {
         String tableName = findTableName(plan);
         List<String> allColumnNames = getColumnNames(tableName);
-        Executor executor = buildExecutor(plan, allColumnNames);
+        boolean distinct = selectStmt != null && selectStmt.distinct();
+        Executor executor = buildExecutor(plan, allColumnNames, distinct);
 
         // 火山模型：open → next → close
         List<Object[]> results = new ArrayList<>();
@@ -100,7 +115,25 @@ public class Engine {
             }
             case Filter f -> getChildColumnNames(f.child());
             case SeqScan s -> getColumnNames(s.tableName());
+            case AggregatePlan ap -> {
+                List<String> names = new ArrayList<>();
+                for (FuncCall fc : ap.aggregates()) {
+                    String argStr = fc.arg() != null
+                            ? funcArgToString(fc.arg())
+                            : "*";
+                    names.add(fc.func().toLowerCase() + "(" + argStr + ")");
+                }
+                yield names;
+            }
             default -> List.of();
+        };
+    }
+
+    private String funcArgToString(Expression expr) {
+        return switch (expr) {
+            case com.minidb.ast.ColumnRef ref -> ref.column();
+            case Literal lit -> String.valueOf(lit.value());
+            default -> expr.toString();
         };
     }
 
@@ -114,6 +147,16 @@ public class Engine {
             }
             case Filter f -> getChildColumnNames(f.child());
             case SeqScan s -> getColumnNames(s.tableName());
+            case AggregatePlan ap -> {
+                List<String> names = new ArrayList<>();
+                for (FuncCall fc : ap.aggregates()) {
+                    String argStr = fc.arg() != null
+                            ? funcArgToString(fc.arg())
+                            : "*";
+                    names.add(fc.func().toLowerCase() + "(" + argStr + ")");
+                }
+                yield names;
+            }
             default -> List.of();
         };
     }
@@ -125,8 +168,9 @@ public class Engine {
     /**
      * 递归构建执行器。
      * @param availableColumns 当前层级可用的列名列表（从 SeqScan 向上传递）
+     * @param distinct 是否 DISTINCT（仅 Project 层使用）
      */
-    private Executor buildExecutor(PlanNode plan, List<String> availableColumns) throws MiniDbException {
+    private Executor buildExecutor(PlanNode plan, List<String> availableColumns, boolean distinct) throws MiniDbException {
         return switch (plan) {
             case SeqScan s -> {
                 List<Integer> pageIds = tablePages.getOrDefault(s.tableName().toLowerCase(), List.of());
@@ -134,12 +178,16 @@ public class Engine {
                 yield new SeqScanExecutor(pool, s.tableName().toLowerCase(), pageIds, cols);
             }
             case Filter f -> {
-                Executor child = buildExecutor(f.child(), availableColumns);
+                Executor child = buildExecutor(f.child(), availableColumns, false);
                 yield new FilterExecutor(child, f.condition(), availableColumns);
             }
             case Project p -> {
-                Executor child = buildExecutor(p.child(), availableColumns);
-                yield new ProjectExecutor(child, p.columns(), availableColumns);
+                Executor child = buildExecutor(p.child(), availableColumns, false);
+                yield new ProjectExecutor(child, p.columns(), availableColumns, distinct);
+            }
+            case AggregatePlan ap -> {
+                Executor child = buildExecutor(ap.input(), availableColumns, false);
+                yield new AggregateExecutor(child, ap.aggregates(), availableColumns);
             }
             default -> throw new MiniDbException(MiniDbException.Phase.PLAN, null,
                     "查询计划不支持: " + plan.getClass().getSimpleName());
@@ -152,6 +200,7 @@ public class Engine {
             case SeqScan s -> s.tableName();
             case Filter f -> findTableName(f.child());
             case Project p -> findTableName(p.child());
+            case AggregatePlan ap -> findTableName(ap.input());
             default -> throw new MiniDbException(MiniDbException.Phase.PLAN, null,
                     "无法确定表名: " + plan.getClass().getSimpleName());
         };

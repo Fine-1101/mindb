@@ -272,8 +272,13 @@ class SemanticAnalyzerTest {
     @Test
     void selectWithColumnsAndWherePasses() throws Exception {
         // SELECT id, name FROM student WHERE score >= 90.0
+<<<<<<< HEAD
         analyzer(studentCatalog()).analyze(new SelectStmt(
                 List.<Expression>of(new ColumnRef(null, "id", p(1, 8)),
+=======
+        analyzer(studentCatalog()).analyze(new SelectStmt(false,
+                List.of(new ColumnRef(null, "id", p(1, 8)),
+>>>>>>> origin/D4-D-aggregate-function
                         new ColumnRef(null, "name", p(1, 12))),
                 "student",
                 new BinaryExpr(new ColumnRef(null, "score", p(1, 32)), BinaryOp.GE,
@@ -284,7 +289,7 @@ class SemanticAnalyzerTest {
     @Test
     void selectStarWithWherePasses() throws Exception {
         // SELECT * FROM student WHERE id = 1
-        analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
+        analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
                 idEqOne(1, 33, 39), p(1, 15)));
     }
 
@@ -292,7 +297,7 @@ class SemanticAnalyzerTest {
     void selectTableMissingRejectedAtTablePosition() {
         // SELECT * FROM stuent WHERE id = 1 —— pos 是 stuent 的位置(1,15)，不是语句首(1,1)
         MiniDbException e = assertThrows(MiniDbException.class, () ->
-                analyzer(studentCatalog()).analyze(new SelectStmt(null, "stuent",
+                analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "stuent",
                         idEqOne(1, 33, 39), p(1, 15))));
         assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
         assertEquals(p(1, 15), e.pos());
@@ -303,8 +308,13 @@ class SemanticAnalyzerTest {
     void selectUnknownColumnRejectedAtColumnPosition() {
         // SELECT naem FROM student —— pos 是 naem 的位置(1,8)
         MiniDbException e = assertThrows(MiniDbException.class, () ->
+<<<<<<< HEAD
                 analyzer(studentCatalog()).analyze(new SelectStmt(
                         List.<Expression>of(new ColumnRef(null, "naem", p(1, 8))),
+=======
+                analyzer(studentCatalog()).analyze(new SelectStmt(false,
+                        List.of(new ColumnRef(null, "naem", p(1, 8))),
+>>>>>>> origin/D4-D-aggregate-function
                         "student", null, p(1, 18))));
         assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
         assertEquals(p(1, 8), e.pos());
@@ -314,7 +324,7 @@ class SemanticAnalyzerTest {
     @Test
     void selectWhereVarcharComparisonPasses() throws Exception {
         // SELECT * FROM student WHERE name = 'x' （VARCHAR=VARCHAR 合法）
-        analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
+        analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
                 new BinaryExpr(new ColumnRef(null, "name", p(1, 33)), BinaryOp.EQ,
                         new Literal("x", DataType.VARCHAR, p(1, 40)), p(1, 33)),
                 p(1, 15)));
@@ -323,7 +333,7 @@ class SemanticAnalyzerTest {
     @Test
     void selectWhereNotComparisonPasses() throws Exception {
         // SELECT * FROM student WHERE NOT id = 1 （NOT 作用于比较结果）
-        analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
+        analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
                 new UnaryExpr(UnaryOp.NOT, idEqOne(1, 37, 43), p(1, 33)), p(1, 15)));
     }
 
@@ -331,7 +341,7 @@ class SemanticAnalyzerTest {
     void selectWhereNonBooleanRejected() {
         // SELECT * FROM student WHERE id —— WHERE 是 INT 列
         MiniDbException e = assertThrows(MiniDbException.class, () ->
-                analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
+                analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
                         new ColumnRef(null, "id", p(1, 33)), p(1, 15))));
         assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
         assertEquals(p(1, 33), e.pos());
@@ -342,7 +352,7 @@ class SemanticAnalyzerTest {
     void selectWhereAndOfIntsRejected() {
         // SELECT * FROM student WHERE 1 AND 2 —— AND 操作数非 BOOLEAN
         MiniDbException e = assertThrows(MiniDbException.class, () ->
-                analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
+                analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
                         new BinaryExpr(new Literal(1, DataType.INT, p(1, 33)), BinaryOp.AND,
                                 new Literal(2, DataType.INT, p(1, 40)), p(1, 33)),
                         p(1, 15))));
@@ -354,7 +364,7 @@ class SemanticAnalyzerTest {
     void selectWhereCrossTypeComparisonRejected() {
         // SELECT * FROM student WHERE id = 'x' —— INT = VARCHAR 跨类
         MiniDbException e = assertThrows(MiniDbException.class, () ->
-                analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
+                analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
                         new BinaryExpr(new ColumnRef(null, "id", p(1, 33)), BinaryOp.EQ,
                                 new Literal("x", DataType.VARCHAR, p(1, 38)), p(1, 33)),
                         p(1, 15))));
@@ -401,7 +411,7 @@ class SemanticAnalyzerTest {
     @Test
     void qualifiedColumnRefPassesWhenTableMatches() throws Exception {
         // SELECT * FROM student WHERE student.id = 1 —— 限定名等于当前表名
-        analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
+        analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
                 new BinaryExpr(new ColumnRef("student", "id", p(1, 33)), BinaryOp.EQ,
                         new Literal(1, DataType.INT, p(1, 46)), p(1, 33)),
                 p(1, 15)));
@@ -411,7 +421,7 @@ class SemanticAnalyzerTest {
     void unknownTableQualifierRejectedAtRefPosition() {
         // SELECT * FROM student WHERE x.id = 1 —— 限定名不等于当前表名
         MiniDbException e = assertThrows(MiniDbException.class, () ->
-                analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
+                analyzer(studentCatalog()).analyze(new SelectStmt(false, null, "student",
                         new BinaryExpr(new ColumnRef("x", "id", p(1, 33)), BinaryOp.EQ,
                                 new Literal(1, DataType.INT, p(1, 38)), p(1, 33)),
                         p(1, 15))));

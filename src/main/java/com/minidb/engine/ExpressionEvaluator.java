@@ -49,10 +49,15 @@ public final class ExpressionEvaluator {
             }
             case BinaryExpr b -> evaluateBinary(b, columns, row);
             case UnaryExpr u -> evaluateUnary(u, columns, row);
+<<<<<<< HEAD
             // D4-A 编译契约适配：FuncCall 已进入 Expression permits。
             // 聚合执行（AggregateExecutor）属于 D 的 D4 任务，这里只给最小占位分支。
             case FuncCall f -> throw new MiniDbException(MiniDbException.Phase.PLAN, f.pos(),
                     "聚合函数执行尚未支持: " + f.func());
+=======
+            case FuncCall fc -> throw new MiniDbException(MiniDbException.Phase.PLAN, fc.pos(),
+                    "聚合函数不能出现在 WHERE 条件中");
+>>>>>>> origin/D4-D-aggregate-function
         };
     }
 

@@ -326,15 +326,32 @@ public class Parser {
     private Statement parseSelect() throws MiniDbException {
         expect(TokenType.KW_SELECT);
 
+<<<<<<< HEAD
+=======
+        // DISTINCT
+        boolean distinct = false;
+        if (check(TokenType.IDENT) && "distinct".equalsIgnoreCase(peek().text())) {
+            advance();
+            distinct = true;
+        }
+
+>>>>>>> origin/D4-D-aggregate-function
         List<Expression> columns = null;
         if (check(TokenType.STAR)) {
             advance(); // SELECT *：columns == null
         } else {
             columns = new ArrayList<>();
+<<<<<<< HEAD
             columns.add(parseSelectItem());
             while (check(TokenType.COMMA)) {
                 advance();
                 columns.add(parseSelectItem());
+=======
+            columns.add(parseSelectExpr());
+            while (check(TokenType.COMMA)) {
+                advance();
+                columns.add(parseSelectExpr());
+>>>>>>> origin/D4-D-aggregate-function
             }
         }
 
@@ -346,6 +363,7 @@ public class Parser {
             advance();
             where = parseExpression();
         }
+<<<<<<< HEAD
         // 约定：stmt.pos 为表名 token 位置
         return new SelectStmt(columns, table.text(), where, table.pos());
     }
@@ -364,6 +382,33 @@ public class Parser {
         }
         Token name = advance();
         return new ColumnRef(null, name.text(), name.pos());
+=======
+        return new SelectStmt(distinct, columns, table.text(), where, start.pos());
+    }
+
+    /** 解析 SELECT 列列表中的单个表达式：聚合函数调用 或 普通列引用。 */
+    private Expression parseSelectExpr() throws MiniDbException {
+        if (check(TokenType.IDENT) && lookaheadIsLParen()) {
+            Token funcName = advance();
+            expect(TokenType.LPAREN);
+            Expression arg = null;
+            if (check(TokenType.STAR)) {
+                advance(); // COUNT(*)
+            } else {
+                arg = parseExpression();
+            }
+            expect(TokenType.RPAREN);
+            return new FuncCall(funcName.text(), arg, funcName.pos());
+        }
+        Token col = expect(TokenType.IDENT);
+        return new ColumnRef(null, col.text(), col.pos());
+    }
+
+    /** 前瞻检查下一个 token 是否为 LPAREN。 */
+    private boolean lookaheadIsLParen() {
+        int next = index + 1;
+        return next < tokens.size() && tokens.get(next).type() == TokenType.LPAREN;
+>>>>>>> origin/D4-D-aggregate-function
     }
 
     // ------------------------------------------------------------------
@@ -464,7 +509,7 @@ public class Parser {
         return parsePrimary();
     }
 
-    /** 原子：INT/FLOAT/STRING 字面量、列引用、括号表达式。 */
+    /** 原子：INT/FLOAT/STRING 字面量、列引用、括号表达式、函数调用（IDENT 后接 LPAREN）。 */
     private Expression parsePrimary() throws MiniDbException {
         Token t = peek();
         switch (t.type()) {
@@ -478,8 +523,23 @@ public class Parser {
                 advance();
                 return new Literal(t.value(), DataType.VARCHAR, t.pos());
             case IDENT:
+<<<<<<< HEAD
                 if (peekType(1) == TokenType.LPAREN) {
                     return parseFunctionCall();
+=======
+                // 检查是否为函数调用：IDENT 后接 LPAREN
+                if (lookaheadIsLParen()) {
+                    advance(); // 消费函数名
+                    expect(TokenType.LPAREN);
+                    Expression arg = null;
+                    if (check(TokenType.STAR)) {
+                        advance(); // COUNT(*)
+                    } else {
+                        arg = parseExpression();
+                    }
+                    expect(TokenType.RPAREN);
+                    return new FuncCall(t.text(), arg, t.pos());
+>>>>>>> origin/D4-D-aggregate-function
                 }
                 advance();
                 return new ColumnRef(null, t.text(), t.pos());

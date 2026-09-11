@@ -155,8 +155,8 @@ public class MiniDB {
         PlanNode plan = planner.plan(stmt);
         PlanNode optimized = optimizer.optimize(plan);
 
-        if (stmt instanceof SelectStmt) {
-            List<Object[]> results = engine.executeQuery(optimized);
+        if (stmt instanceof SelectStmt selectStmt) {
+            List<Object[]> results = engine.executeQuery(optimized, selectStmt);
             List<String> colNames = engine.getQueryColumnNames(optimized);
             printResultTable(colNames, results);
         } else {
@@ -209,8 +209,8 @@ public class MiniDB {
 
                 // 5. 执行结果
                 System.out.println("── Result ──");
-                if (stmt instanceof SelectStmt) {
-                    List<Object[]> results = engine.executeQuery(optimized);
+                if (stmt instanceof SelectStmt selectStmt) {
+                    List<Object[]> results = engine.executeQuery(optimized, selectStmt);
                     List<String> colNames = engine.getQueryColumnNames(optimized);
                     printResultTable(colNames, results);
                 } else {
@@ -343,6 +343,13 @@ public class MiniDB {
                 String cond = p.condition() != null ? exprToString(p.condition()) : "ALL";
                 System.out.println(indent + "Delete(" + p.tableName() + ", " + cond + ")");
             }
+            case AggregatePlan ap -> {
+                String funcs = ap.aggregates().stream()
+                        .map(fc -> fc.func().toLowerCase() + "(" + (fc.arg() != null ? exprToString(fc.arg()) : "*") + ")")
+                        .reduce("", (a, b) -> a.isEmpty() ? b : a + "," + b);
+                System.out.println(indent + "Aggregate[" + funcs + "]");
+                printPlanTree(ap.input(), indent + "  ");
+            }
         }
     }
 
@@ -357,11 +364,17 @@ public class MiniDB {
                     + ")";
             case InsertStmt s -> "(insert " + s.tableName() + " " + s.rows().size() + " rows)";
             case SelectStmt s -> {
-                StringBuilder sb = new StringBuilder("(select ");
+                StringBuilder sb = new StringBuilder("(select");
+                if (s.distinct()) sb.append(" distinct");
+                sb.append(" ");
                 if (s.columns() == null) {
                     sb.append("*");
                 } else {
+<<<<<<< HEAD
                     sb.append(s.columns().stream().map(this::selectItemToSExpr).reduce("", (a, b) -> a + " " + b).trim());
+=======
+                    sb.append(s.columns().stream().map(this::exprToSExpr).reduce("", (a, b) -> a + " " + b).trim());
+>>>>>>> origin/D4-D-aggregate-function
                 }
                 sb.append(" (from ").append(s.tableName()).append(")");
                 if (s.where() != null) {
@@ -398,8 +411,13 @@ public class MiniDB {
             case ColumnRef ref -> "(col " + ref.column() + ")";
             case BinaryExpr b -> "(" + b.op() + " " + exprToSExpr(b.left()) + " " + exprToSExpr(b.right()) + ")";
             case UnaryExpr u -> "(" + u.op() + " " + exprToSExpr(u.operand()) + ")";
+<<<<<<< HEAD
             // D4-A 编译契约适配：聚合打印由 D 的 D4 任务实现，这里仅占位。
             case FuncCall f -> "(func " + f.func() + " ...)";
+=======
+            case FuncCall fc -> "(" + fc.func().toLowerCase() + " "
+                    + (fc.arg() != null ? exprToSExpr(fc.arg()) : "*") + ")";
+>>>>>>> origin/D4-D-aggregate-function
         };
     }
 
@@ -409,8 +427,13 @@ public class MiniDB {
             case ColumnRef ref -> ref.column();
             case BinaryExpr b -> exprToString(b.left()) + " " + b.op() + " " + exprToString(b.right());
             case UnaryExpr u -> u.op() + " " + exprToString(u.operand());
+<<<<<<< HEAD
             // D4-A 编译契约适配：聚合打印由 D 的 D4 任务实现，这里仅占位。
             case FuncCall f -> f.func() + "(...)";
+=======
+            case FuncCall fc -> fc.func().toLowerCase() + "("
+                    + (fc.arg() != null ? exprToString(fc.arg()) : "*") + ")";
+>>>>>>> origin/D4-D-aggregate-function
         };
     }
 

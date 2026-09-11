@@ -90,4 +90,33 @@ class BufferLogTest {
         assertTrue(lines.stream().anyMatch(l -> l.contains("HIT")), "应包含 HIT 事件");
         assertTrue(lines.stream().anyMatch(l -> l.contains("MISS")), "应包含 MISS 事件");
     }
+
+    // 在 BufferLogTest.java 中新增
+
+    @Test
+    void logRecordsDualTableAccess() {
+        // 拍板10：JOIN 双表访问，buffer.log 记录两表事件
+        // 用现有 BufferPoolWithStrategy 模拟双表访问
+        Page pageA = pool.newPage("table_a");
+        Page pageB = pool.newPage("table_b");
+
+        pool.getPage("table_a", pageA.pageId());  // hit
+        pool.getPage("table_b", pageB.pageId());  // hit
+        pool.getPage("table_a", 999);              // miss
+        pool.getPage("table_b", 888);              // miss
+
+        var lines = logger.getLines();
+        assertTrue(lines.stream().anyMatch(l -> l.contains("table=table_a")),
+                "应该记录 table_a 的访问");
+        assertTrue(lines.stream().anyMatch(l -> l.contains("table=table_b")),
+                "应该记录 table_b 的访问");
+
+        // 验证两表事件计数
+        long tableAHits = lines.stream()
+                .filter(l -> l.contains("HIT") && l.contains("table=table_a")).count();
+        long tableBHits = lines.stream()
+                .filter(l -> l.contains("HIT") && l.contains("table=table_b")).count();
+        assertEquals(1, tableAHits, "table_a 应该有 1 次 hit");
+        assertEquals(1, tableBHits, "table_b 应该有 1 次 hit");
+    }
 }

@@ -3,6 +3,10 @@ package com.minidb.storage;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import com.minidb.catalog.ColumnDef;
+import com.minidb.common.DataType;
+import com.minidb.engine.RowEncoder;
+import java.util.List;
 
 import java.util.stream.Stream;
 
@@ -162,5 +166,117 @@ class ParameterizedPageTest {
                 ((bytes[offset + 1] & 0xFF) << 16) |
                 ((bytes[offset + 2] & 0xFF) << 8) |
                 (bytes[offset + 3] & 0xFF);
+    }
+
+    // 在 ParameterizedPageTest.java 中新增
+
+    @ParameterizedTest(name = "{1}")
+    @MethodSource("pageImplementations")
+    void rowEncoderNullRoundTrip(Page page, String name) {
+        // 拍板4：NULL 可赋给任何列类型
+        // 测试 INT/FLOAT/VARCHAR 各列含 NULL 混合行
+        List<ColumnDef> columns = List.of(
+                new ColumnDef("id", DataType.INT, 0),
+                new ColumnDef("score", DataType.FLOAT, 0),
+                new ColumnDef("name", DataType.VARCHAR, 32));
+
+        // 构造含 NULL 的混合行
+        Object[][] testValues = {
+                {1, 95.5, "Alice"},           // 无 NULL
+                {null, 88.0, "Bob"},          // INT NULL
+                {3, null, "Carol"},           // FLOAT NULL
+                {4, 72.5, null},              // VARCHAR NULL
+                {null, null, null},           // 全 NULL
+                {6, 60.0, ""},                // 空字符串（非 NULL）
+        };
+
+        byte[][] encodedRows = new byte[testValues.length][];
+        for (int i = 0; i < testValues.length; i++) {
+            encodedRows[i] = RowEncoder.encode(columns, testValues[i]);
+            int slot = page.insertRow(encodedRows[i]);
+            assertEquals(i, slot, name + ": 槽号应该递增");
+        }
+
+        // 读回并验证逐字节一致 + decode 后值相等（含 null）
+        for (int i = 0; i < testValues.length; i++) {
+            byte[] readRow = page.readRow(i);
+            assertArrayEquals(encodedRows[i], readRow,
+                    name + ": 第 " + i + " 行字节应该一致（含 NULL 编码）");
+
+            Object[] decoded = RowEncoder.decode(columns, readRow);
+            assertArrayEquals(testValues[i], decoded,
+                    name + ": 第 " + i + " 行 decode 后值应该一致（含 null）");
+        }
+    }
+
+    @ParameterizedTest(name = "{1}")
+    @MethodSource("pageImplementations")
+    void rowEncoderNullFreeSpaceParity(Page page, String name) {
+        // 拍板4：含 NULL 的行 freeSpace 减量 == 行字节 + 槽目录项
+        List<ColumnDef> columns = List.of(
+                new ColumnDef("id", DataType.INT, 0),
+                new ColumnDef("score", DataType.FLOAT, 0),
+                new ColumnDef("name", DataType.VARCHAR, 32));
+
+        Object[] rowWithNull = {null, null, null};
+        byte[] encoded = RowEncoder.encode(columns, rowWithNull);
+        int expectedSize = encoded.length;
+
+        int freeBefore = page.freeSpace();
+        page.insertRow(encoded);
+        int freeAfter = page.freeSpace();
+
+        assertEquals(freeBefore - freeAfter, expectedSize + Page.SLOT_ENTRY_SIZE,
+                name + ": 含 NULL 行的 freeSpace 减量应该 == 行字节 + 槽目录项");
+    }
+
+    // 在 ParameterizedPageTest.java 中新增
+
+    @ParameterizedTest(name = "{1}")
+    @MethodSource("pageImplementations")
+    void updateStoragePathParity(Page page, String name) {
+        // 拍板2：UPDATE 存储 = deleteRow + insertRow，复用 DELETE+INSERT 路径
+        // 证明无存储侧新语义：freeSpace 变化 == 对应 DELETE+INSERT 序列
+
+        byte[] row1 = new byte[]{1, 2, 3};
+        byte[] row2 = new byte[]{4, 5, 6, 7};
+        byte[] row3 = new byte[]{8, 9};
+
+        // 场景A：UPDATE 模拟（deleteRow + insertRow）
+        page.insertRow(row1);   // slot 0
+        page.insertRow(row2);   // slot 1
+        int freeBeforeA = page.freeSpace();
+
+        page.deleteRow(0);      // UPDATE 第一步：删旧行
+        page.insertRow(row3);   // UPDATE 第二步：插新行
+
+        int freeAfterA = page.freeSpace();
+
+        // 场景B：DELETE + INSERT 序列（等价路径）
+        Page pageB = name.equals("MemoryPage") ? new MemoryPage(2) : new SlottedPage(2);
+        pageB.insertRow(row1);
+        pageB.insertRow(row2);
+        int freeBeforeB = pageB.freeSpace();
+
+        pageB.deleteRow(0);
+        pageB.insertRow(row3);
+
+        int freeAfterB = pageB.freeSpace();
+
+        // 断言：freeSpace 变化完全一致
+        assertEquals(freeBeforeA - freeAfterA, freeBeforeB - freeAfterB,
+                name + ": UPDATE 与 DELETE+INSERT 的 freeSpace 变化应该一致");
+
+        // 断言：final freeSpace 一致
+        assertEquals(freeAfterA, freeAfterB,
+                name + ": UPDATE 与 DELETE+INSERT 的最终 freeSpace 应该一致");
+
+        // 断言：行数据一致
+        assertArrayEquals(row3, page.readRow(2), name + ": UPDATE 后新行应该可读");
+        assertNull(page.readRow(0), name + ": UPDATE 后旧行应该已删除");
+
+        // 断言：slotCount 一致（标记删除不回收槽）
+        assertEquals(page.slotCount(), pageB.slotCount(),
+                name + ": UPDATE 与 DELETE+INSERT 的 slotCount 应该一致");
     }
 }

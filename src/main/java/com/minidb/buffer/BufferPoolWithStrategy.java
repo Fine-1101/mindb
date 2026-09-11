@@ -20,8 +20,14 @@ public class BufferPoolWithStrategy implements BufferPool {
     private final AtomicInteger nextPageId;
     private final AtomicLong hits;
     private final AtomicLong misses;
+    private final AtomicLong evictions;
+    private final BufferLogger logger;
 
     public BufferPoolWithStrategy(int capacity, Strategy strategy) {
+        this(capacity, strategy, null);
+    }
+
+    public BufferPoolWithStrategy(int capacity, Strategy strategy, BufferLogger logger) {
         if (capacity <= 0) {
             throw new IllegalArgumentException("Capacity must be positive");
         }
@@ -34,6 +40,8 @@ public class BufferPoolWithStrategy implements BufferPool {
         this.nextPageId = new AtomicInteger(0);
         this.hits = new AtomicLong(0);
         this.misses = new AtomicLong(0);
+        this.evictions = new AtomicLong(0);
+        this.logger = logger;
     }
 
     @Override
@@ -41,6 +49,9 @@ public class BufferPoolWithStrategy implements BufferPool {
         // 检查是否在缓冲池中
         if (inBuffer.contains(pageId)) {
             hits.incrementAndGet();
+            if (logger != null) {
+                logger.logHit(tableName, pageId);
+            }
             if (strategy == Strategy.LRU) {
                 synchronized (accessOrder) {
                     accessOrder.remove(Integer.valueOf(pageId));
@@ -52,6 +63,9 @@ public class BufferPoolWithStrategy implements BufferPool {
 
         // 未命中
         misses.incrementAndGet();
+        if (logger != null) {
+            logger.logMiss(tableName, pageId);
+        }
         return null;
     }
 
@@ -66,7 +80,7 @@ public class BufferPoolWithStrategy implements BufferPool {
 
         // 如果缓冲池已满，需要淘汰
         if (inBuffer.size() >= capacity) {
-            evict();
+            evict(tableName);
         }
 
         inBuffer.add(pageId);
@@ -77,19 +91,21 @@ public class BufferPoolWithStrategy implements BufferPool {
         return page;
     }
 
-    private void evict() {
+    private void evict(String tableName) {
         if (inBuffer.isEmpty()) {
             return;
         }
 
         int victimId;
         synchronized (accessOrder) {
-            // LRU：getPage 命中时把页移到队尾，队首=最久未访问；
-            // FIFO：命中不刷新，队首=最早进入缓冲池。淘汰逻辑统一取队首。
             victimId = accessOrder.remove(0);
         }
 
         inBuffer.remove(victimId);
+        evictions.incrementAndGet();
+        if (logger != null) {
+            logger.logEvict(tableName, victimId);
+        }
     }
 
     @Override
@@ -104,5 +120,9 @@ public class BufferPoolWithStrategy implements BufferPool {
 
     public Set<Integer> getBufferContent() {
         return new HashSet<>(inBuffer);
+    }
+
+    public long getEvictions() {
+        return evictions.get();
     }
 }

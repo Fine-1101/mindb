@@ -9,10 +9,13 @@ import com.minidb.ast.Expression;
 import com.minidb.ast.FuncCall;
 import com.minidb.ast.InsertStmt;
 import com.minidb.ast.Literal;
+import com.minidb.ast.OrderKey;
 import com.minidb.ast.SelectStmt;
+import com.minidb.ast.SetClause;
 import com.minidb.ast.Statement;
 import com.minidb.ast.UnaryExpr;
 import com.minidb.ast.UnaryOp;
+import com.minidb.ast.UpdateStmt;
 import com.minidb.catalog.ColumnDef;
 import com.minidb.common.DataType;
 import com.minidb.common.MiniDbException;
@@ -210,9 +213,11 @@ public class Parser {
                 return parseSelect();
             case KW_DELETE:
                 return parseDelete();
+            case KW_UPDATE:
+                return parseUpdate();
             default:
                 throw error(peek(), TokenType.KW_CREATE, TokenType.KW_INSERT,
-                        TokenType.KW_SELECT, TokenType.KW_DELETE);
+                        TokenType.KW_SELECT, TokenType.KW_DELETE, TokenType.KW_UPDATE);
         }
     }
 
@@ -301,7 +306,7 @@ public class Parser {
         return row;
     }
 
-    /** INSERT 的值只能是字面量：INT_LIT / FLOAT_LIT / STRING。 */
+    /** INSERT 的值只能是字面量：INT_LIT / FLOAT_LIT / STRING / NULL。 */
     private Expression parseValueLiteral() throws MiniDbException {
         Token t = peek();
         switch (t.type()) {
@@ -314,13 +319,16 @@ public class Parser {
             case STRING:
                 advance();
                 return new Literal(t.value(), DataType.VARCHAR, t.pos());
+            case KW_NULL:
+                advance();
+                return new Literal(null, DataType.NULL, t.pos());
             default:
-                throw error(t, TokenType.INT_LIT, TokenType.FLOAT_LIT, TokenType.STRING);
+                throw error(t, TokenType.INT_LIT, TokenType.FLOAT_LIT, TokenType.STRING, TokenType.KW_NULL);
         }
     }
 
     // ------------------------------------------------------------------
-    // SELECT
+    // SELECT（含 JOIN / GROUP BY / ORDER BY）
     // ------------------------------------------------------------------
 
     private Statement parseSelect() throws MiniDbException {
@@ -356,24 +364,97 @@ public class Parser {
         expect(TokenType.KW_FROM);
         Token table = expect(TokenType.IDENT);
 
+        // [JOIN 表名 ON 条件]
+        String joinTable = null;
+        Expression joinOn = null;
+        if (check(TokenType.KW_JOIN)) {
+            advance();
+            joinTable = expect(TokenType.IDENT).text();
+            expect(TokenType.KW_ON);
+            joinOn = parseExpression();
+        }
+
         Expression where = null;
         if (check(TokenType.KW_WHERE)) {
             advance();
             where = parseExpression();
         }
+
+        // [GROUP BY 列[, ...]]
+        List<ColumnRef> groupBy = null;
+        if (check(TokenType.KW_GROUP)) {
+            advance();
+            expect(TokenType.KW_BY);
+            groupBy = new ArrayList<>();
+            groupBy.add(parseColumnRefSimple());
+            while (check(TokenType.COMMA)) {
+                advance();
+                groupBy.add(parseColumnRefSimple());
+            }
+        }
+
+        // [ORDER BY 列 [ASC|DESC][, ...]]
+        List<OrderKey> orderBy = null;
+        if (check(TokenType.KW_ORDER)) {
+            advance();
+            expect(TokenType.KW_BY);
+            orderBy = new ArrayList<>();
+            orderBy.add(parseOrderByKey());
+            while (check(TokenType.COMMA)) {
+                advance();
+                orderBy.add(parseOrderByKey());
+            }
+        }
+
         // 约定：stmt.pos 为表名 token 位置
-        return new SelectStmt(columns, aggregates, table.text(), where, distinct, table.pos());
+        return new SelectStmt(columns, aggregates, table.text(), where, distinct,
+                groupBy, orderBy, joinTable, joinOn, table.pos());
     }
 
-    /** SELECT 列表项：IDENT( → 聚合 FuncCall；否则普通列。混写由 Semantic 报"聚合函数不能与普通列混写"。 */
+    /** 解析简单列引用（支持限定名 table.column，用于 GROUP BY）。 */
+    private ColumnRef parseColumnRefSimple() throws MiniDbException {
+        Token t = expect(TokenType.IDENT);
+        if (check(TokenType.DOT)) {
+            advance();
+            Token colToken = expect(TokenType.IDENT);
+            return new ColumnRef(t.text(), colToken.text(), t.pos());
+        }
+        return new ColumnRef(null, t.text(), t.pos());
+    }
+
+    /** 解析 ORDER BY 键：列 [ASC|DESC]，支持限定名 table.column。 */
+    private OrderKey parseOrderByKey() throws MiniDbException {
+        Token t = expect(TokenType.IDENT);
+        ColumnRef col;
+        if (check(TokenType.DOT)) {
+            advance();
+            Token colToken = expect(TokenType.IDENT);
+            col = new ColumnRef(t.text(), colToken.text(), t.pos());
+        } else {
+            col = new ColumnRef(null, t.text(), t.pos());
+        }
+        boolean asc = true;
+        if (check(TokenType.KW_ASC)) {
+            advance();
+        } else if (check(TokenType.KW_DESC)) {
+            advance();
+            asc = false;
+        }
+        return new OrderKey(col, asc);
+    }
+
+    /** SELECT 列表项：IDENT( → 聚合 FuncCall；IDENT.IDENT → 限定列引用；否则普通列。 */
     private void parseSelectItem(List<ColumnRef> columns, List<FuncCall> aggregates) throws MiniDbException {
         if (!check(TokenType.IDENT)) {
-            // 诊断：明确提示这里期待 * 或列名/聚合项（例如 SELECT FROM t）
             throw error(peek(), TokenType.STAR, TokenType.IDENT);
         }
         Token t = expect(TokenType.IDENT);
         if (check(TokenType.LPAREN)) {
             aggregates.add(parseFuncCallRest(t));
+        } else if (check(TokenType.DOT)) {
+            advance();
+            Token colToken = expect(TokenType.IDENT);
+            columns.add(new ColumnRef(t.text(), colToken.text(), t.pos()));
         } else {
             columns.add(new ColumnRef(null, t.text(), t.pos()));
         }
@@ -408,6 +489,37 @@ public class Parser {
         }
         // 约定：stmt.pos 为表名 token 位置
         return new DeleteStmt(table.text(), where, table.pos());
+    }
+
+    // ------------------------------------------------------------------
+    // UPDATE 表名 SET 列=值[, ...] [WHERE 条件]
+    // ------------------------------------------------------------------
+
+    private Statement parseUpdate() throws MiniDbException {
+        expect(TokenType.KW_UPDATE);
+        Token table = expect(TokenType.IDENT);
+        expect(TokenType.KW_SET);
+
+        List<SetClause> sets = new ArrayList<>();
+        sets.add(parseSetClause());
+        while (check(TokenType.COMMA)) {
+            advance();
+            sets.add(parseSetClause());
+        }
+
+        Expression where = null;
+        if (check(TokenType.KW_WHERE)) {
+            advance();
+            where = parseExpression();
+        }
+        return new UpdateStmt(table.text(), sets, where, table.pos());
+    }
+
+    private SetClause parseSetClause() throws MiniDbException {
+        Token col = expect(TokenType.IDENT);
+        expect(TokenType.OP_EQ);
+        Expression value = parseExpression();
+        return new SetClause(new ColumnRef(null, col.text(), col.pos()), value);
     }
 
     // ==================================================================
@@ -450,6 +562,18 @@ public class Parser {
 
     private Expression parseComparison() throws MiniDbException {
         Expression left = parseAdditive();
+        // IS [NOT] NULL 后缀谓词（拍板 8）
+        if (check(TokenType.KW_IS)) {
+            Token isToken = advance();
+            boolean not = false;
+            if (check(TokenType.KW_NOT)) {
+                advance();
+                not = true;
+            }
+            expect(TokenType.KW_NULL);
+            UnaryOp op = not ? UnaryOp.IS_NOT_NULL : UnaryOp.IS_NULL;
+            return new UnaryExpr(op, left, isToken.pos());
+        }
         if (isComparisonOperator(peek().type())) {
             Token op = advance();
             Expression right = parseAdditive();
@@ -490,7 +614,7 @@ public class Parser {
         return parsePrimary();
     }
 
-    /** 原子：INT/FLOAT/STRING 字面量、列引用、括号表达式。 */
+    /** 原子：INT/FLOAT/STRING/NULL 字面量、列引用（含限定名 t.col）、括号表达式。 */
     private Expression parsePrimary() throws MiniDbException {
         Token t = peek();
         switch (t.type()) {
@@ -503,11 +627,20 @@ public class Parser {
             case STRING:
                 advance();
                 return new Literal(t.value(), DataType.VARCHAR, t.pos());
+            case KW_NULL:
+                advance();
+                return new Literal(null, DataType.NULL, t.pos());
             case IDENT:
                 advance();
                 if (check(TokenType.LPAREN)) {
                     // IDENT( → 聚合函数（如 WHERE 中的 COUNT(x)，Semantic 层判定合法性并报错）
                     return parseFuncCallRest(t);
+                }
+                // 限定名 t.col
+                if (check(TokenType.DOT)) {
+                    advance();
+                    Token colToken = expect(TokenType.IDENT);
+                    return new ColumnRef(t.text(), colToken.text(), t.pos());
                 }
                 return new ColumnRef(null, t.text(), t.pos());
             case LPAREN:
@@ -517,7 +650,7 @@ public class Parser {
                 return inner;
             default:
                 throw error(t, TokenType.IDENT, TokenType.INT_LIT, TokenType.FLOAT_LIT,
-                        TokenType.STRING, TokenType.LPAREN);
+                        TokenType.STRING, TokenType.LPAREN, TokenType.KW_NULL);
         }
     }
 

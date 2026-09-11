@@ -171,7 +171,7 @@ public class MiniDB {
             List<String> colNames = engine.getQueryColumnNames(optimized);
             printResultTable(colNames, results);
         } else {
-            engine.execute(optimized);
+            Integer updateCount = engine.execute(optimized);
             // DDL/DML 反馈
             if (stmt instanceof CreateTableStmt s) {
                 System.out.println("表 " + s.tableName() + " 已创建");
@@ -180,6 +180,9 @@ public class MiniDB {
                 System.out.println("插入 " + rowCount + " 行");
             } else if (stmt instanceof DeleteStmt) {
                 System.out.println("删除完成");
+            } else if (stmt instanceof UpdateStmt) {
+                int cnt = updateCount != null ? updateCount : 0;
+                System.out.println("更新 " + cnt + " 行");
             }
         }
     }
@@ -225,7 +228,7 @@ public class MiniDB {
                     List<String> colNames = engine.getQueryColumnNames(optimized);
                     printResultTable(colNames, results);
                 } else {
-                    engine.execute(optimized);
+                    Integer updateCount = engine.execute(optimized);
                     if (stmt instanceof CreateTableStmt s) {
                         System.out.println("表 " + s.tableName() + " 已创建");
                     } else if (stmt instanceof InsertStmt s) {
@@ -233,7 +236,8 @@ public class MiniDB {
                     } else if (stmt instanceof DeleteStmt) {
                         System.out.println("删除完成");
                     } else if (stmt instanceof UpdateStmt) {
-                        System.out.println("更新完成");
+                        int cnt = updateCount != null ? updateCount : 0;
+                        System.out.println("更新 " + cnt + " 行");
                     }
                 }
             }

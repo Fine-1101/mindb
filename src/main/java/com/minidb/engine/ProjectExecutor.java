@@ -44,7 +44,14 @@ public class ProjectExecutor implements Executor {
         if (columns != null && childColumns != null) {
             Map<String, Integer> nameToIdx = new HashMap<>();
             for (int i = 0; i < childColumns.size(); i++) {
-                nameToIdx.put(childColumns.get(i).toLowerCase(), i);
+                String lower = childColumns.get(i).toLowerCase();
+                nameToIdx.put(lower, i);
+                // 限定名列同时注册非限定名（仅首次注册，避免二义覆盖）
+                int dotPos = lower.indexOf('.');
+                if (dotPos >= 0) {
+                    String unqual = lower.substring(dotPos + 1);
+                    nameToIdx.putIfAbsent(unqual, i);
+                }
             }
             this.indices = new int[columns.size()];
             for (int i = 0; i < columns.size(); i++) {

@@ -4,6 +4,7 @@ import com.minidb.ast.ColumnRef;
 import com.minidb.ast.CreateTableStmt;
 import com.minidb.ast.DeleteStmt;
 import com.minidb.ast.InsertStmt;
+import com.minidb.ast.OrderKey;
 import com.minidb.ast.SelectStmt;
 import com.minidb.ast.Statement;
 import com.minidb.ast.UpdateStmt;
@@ -16,9 +17,13 @@ import com.minidb.plan.CreateTablePlan;
 import com.minidb.plan.DeletePlan;
 import com.minidb.plan.Filter;
 import com.minidb.plan.InsertPlan;
+import com.minidb.plan.JoinPlan;
 import com.minidb.plan.PlanNode;
 import com.minidb.plan.Project;
 import com.minidb.plan.SeqScan;
+import com.minidb.plan.SortKey;
+import com.minidb.plan.SortPlan;
+import com.minidb.plan.UpdatePlan;
 
 import java.util.List;
 
@@ -47,8 +52,7 @@ public class Planner {
             case SelectStmt select -> planSelect(select);
             case DeleteStmt delete -> new DeletePlan(delete.tableName(), delete.where());
             // D5 M0 桩：UPDATE 计划生成在并行阶段实现（Semantic 桩先行拦截，正常不可达）
-            case UpdateStmt update -> throw new MiniDbException(MiniDbException.Phase.PLAN, update.pos(),
-                    "UPDATE 计划生成未实现（D5 并行阶段）");
+            case UpdateStmt update -> new UpdatePlan(update.tableName(), update.sets(), update.where());
         };
     }
 
@@ -67,16 +71,53 @@ public class Planner {
     }
 
     private PlanNode planSelect(SelectStmt select) {
-        PlanNode source = new SeqScan(select.tableName());
+        // 1. 底层：SeqScan 或 JoinPlan
+        PlanNode source;
+        if (select.joinTable() != null) {
+            PlanNode leftScan = new SeqScan(select.tableName());
+            PlanNode rightScan = new SeqScan(select.joinTable());
+            source = new JoinPlan(leftScan, rightScan, select.joinOn());
+        } else {
+            source = new SeqScan(select.tableName());
+        }
+
+        // 2. WHERE → Filter
         if (select.where() != null) {
             source = new Filter(source, select.where());
         }
+
+        // 3. 聚合 / GROUP BY → AggregatePlan
         if (select.aggregates() != null) {
-            // SELECT 含聚合 → AggregatePlan（语义层已拒绝与普通列混写，无 Project 层）
-            return new AggregatePlan(source, select.aggregates());
+            List<String> groupBy = select.groupBy() == null ? null
+                    : select.groupBy().stream().map(ColumnRef::column).toList();
+            source = new AggregatePlan(source, select.aggregates(), groupBy);
+            // AggregatePlan 输出 [组键...]+[聚合...]，不需额外 Project
+            // （SELECT 书写序 = 组键在前、聚合在后，与 AggregatePlan 输出一致）
+            // ORDER BY
+            if (select.orderBy() != null) {
+                List<SortKey> sortKeys = select.orderBy().stream()
+                        .map(k -> new SortKey(k.column().column(), k.asc()))
+                        .toList();
+                source = new SortPlan(source, sortKeys);
+            }
+            return source;
         }
+
+        // 4. 普通列 → Project
         List<String> columns = select.columns() == null ? null
-                : select.columns().stream().map(ColumnRef::column).toList();
-        return new Project(source, columns, select.distinct());
+                : select.columns().stream()
+                        .map(c -> c.table() != null ? c.table() + "." + c.column() : c.column())
+                        .toList();
+        PlanNode plan = new Project(source, columns, select.distinct());
+
+        // 5. ORDER BY → SortPlan
+        if (select.orderBy() != null) {
+            List<SortKey> sortKeys = select.orderBy().stream()
+                    .map(k -> new SortKey(k.column().column(), k.asc()))
+                    .toList();
+            plan = new SortPlan(plan, sortKeys);
+        }
+
+        return plan;
     }
 }

@@ -9,7 +9,9 @@ import com.minidb.ast.Expression;
 import com.minidb.ast.FuncCall;
 import com.minidb.ast.InsertStmt;
 import com.minidb.ast.Literal;
+import com.minidb.ast.OrderKey;
 import com.minidb.ast.SelectStmt;
+import com.minidb.ast.SetClause;
 import com.minidb.ast.Statement;
 import com.minidb.ast.UnaryExpr;
 import com.minidb.ast.UpdateStmt;
@@ -58,9 +60,7 @@ public class SemanticAnalyzer {
             case InsertStmt s -> checkInsert(s);
             case SelectStmt s -> checkSelect(s);
             case DeleteStmt s -> checkDelete(s);
-            // D5 M0 桩：UPDATE 语义检查（表/SET 列存在、值类型、WHERE 布尔）在并行阶段实现
-            case UpdateStmt s -> throw new MiniDbException(MiniDbException.Phase.SEMANTIC, s.pos(),
-                    "UPDATE 语义检查未实现（D5 并行阶段）");
+            case UpdateStmt s -> checkUpdate(s);
         }
     }
 
@@ -162,9 +162,9 @@ public class SemanticAnalyzer {
             }
         }
         boolean ok = switch (columnType) {
-            case INT -> lit.type() == DataType.INT;
-            case FLOAT -> lit.type() == DataType.INT || lit.type() == DataType.FLOAT;
-            case VARCHAR -> lit.type() == DataType.VARCHAR;
+            case INT -> lit.type() == DataType.INT || lit.type() == DataType.NULL;
+            case FLOAT -> lit.type() == DataType.INT || lit.type() == DataType.FLOAT || lit.type() == DataType.NULL;
+            case VARCHAR -> lit.type() == DataType.VARCHAR || lit.type() == DataType.NULL;
             case BOOLEAN -> false;
             // NULL 与 BOOLEAN 同为先例：仅字面量语义类型，不能作列类型（建表时 Parser 已拒绝）
             case NULL -> false;
@@ -181,23 +181,54 @@ public class SemanticAnalyzer {
 
     private void checkSelect(SelectStmt s) throws MiniDbException {
         TableDef table = requireTable(s.tableName(), s.pos());
+
+        // JOIN 多表列解析
+        TableDef joinTableDef = null;
+        List<String> tableNames = new ArrayList<>();
+        tableNames.add(table.tableName());
+        if (s.joinTable() != null) {
+            joinTableDef = requireTable(s.joinTable(), s.pos());
+            tableNames.add(joinTableDef.tableName());
+            // ON 条件布尔检查
+            if (s.joinOn() == null) {
+                throw new MiniDbException(MiniDbException.Phase.SEMANTIC, s.pos(),
+                        "JOIN 缺少 ON 条件");
+            }
+            requireBooleanWhere(s.joinOn(), tableNames);
+        }
+
+        // 列存在性检查（多表解析）
         if (s.columns() != null) {
             for (ColumnRef c : s.columns()) {
-                resolveColumn(table.tableName(), c); // 纯存在性检查；SELECT * 的展开归 Planner
+                resolveColumnMulti(c, tableNames, table, joinTableDef);
             }
         }
         if (s.aggregates() != null) {
-            checkAggregates(s, table);
+            checkAggregatesMulti(s, table, joinTableDef, tableNames);
         }
         if (s.where() != null) {
             rejectAggregateInWhere(s.where());
-            requireBooleanWhere(s.where(), table.tableName());
+            requireBooleanWhere(s.where(), tableNames);
+        }
+        // GROUP BY 检查：非聚合列必须在 GROUP BY 中
+        if (s.groupBy() != null && s.aggregates() != null) {
+            // 聚合 + GROUP BY：合法
+        } else if (s.groupBy() != null) {
+            throw new MiniDbException(MiniDbException.Phase.SEMANTIC, s.pos(),
+                    "GROUP BY 必须与聚合函数一起使用");
+        }
+        // ORDER BY 列存在性检查
+        if (s.orderBy() != null) {
+            for (OrderKey key : s.orderBy()) {
+                resolveColumnMulti(key.column(), tableNames, table, joinTableDef);
+            }
         }
     }
 
     /** 聚合四查（D4 拍板）：混写普通列 / 未知函数 / 非 COUNT 用 * / 参数类型不支持。 */
     private void checkAggregates(SelectStmt s, TableDef table) throws MiniDbException {
-        if (s.columns() != null) {
+        // GROUP BY 时允许聚合与普通列混写
+        if (s.columns() != null && s.groupBy() == null) {
             throw new MiniDbException(MiniDbException.Phase.SEMANTIC, s.aggregates().get(0).pos(),
                     "聚合函数不能与普通列混写: " + s.aggregates().get(0).display());
         }
@@ -211,11 +242,61 @@ public class SemanticAnalyzer {
                         "只有 COUNT 支持 *: " + f.func());
             }
             if (f.arg() != null) {
-                DataType argType = infer(f.arg(), table.tableName()); // arg 内列存在性/类型，错误自带 pos
+                DataType argType = infer(f.arg(), table.tableName());
                 TypeRules.aggregate(f.func(), argType).orElseThrow(() ->
                         new MiniDbException(MiniDbException.Phase.SEMANTIC, f.pos(),
                                 "聚合参数类型不支持: " + f.func() + "(" + argType + ")"));
             }
+        }
+    }
+
+    /** 多表聚合检查（JOIN 场景）。 */
+    private void checkAggregatesMulti(SelectStmt s, TableDef left, TableDef right,
+                                       List<String> tableNames) throws MiniDbException {
+        // GROUP BY 时允许聚合与普通列混写（普通列必须是 GROUP BY 列）
+        if (s.columns() != null && s.groupBy() == null) {
+            throw new MiniDbException(MiniDbException.Phase.SEMANTIC, s.aggregates().get(0).pos(),
+                    "聚合函数不能与普通列混写: " + s.aggregates().get(0).display());
+        }
+        for (FuncCall f : s.aggregates()) {
+            if (!AGG_FUNCS.contains(f.func())) {
+                throw new MiniDbException(MiniDbException.Phase.SEMANTIC, f.pos(),
+                        "未知聚合函数: " + f.func());
+            }
+            if (f.arg() == null && !"COUNT".equals(f.func())) {
+                throw new MiniDbException(MiniDbException.Phase.SEMANTIC, f.pos(),
+                        "只有 COUNT 支持 *: " + f.func());
+            }
+            if (f.arg() != null) {
+                DataType argType = inferMulti(f.arg(), tableNames, left, right);
+                TypeRules.aggregate(f.func(), argType).orElseThrow(() ->
+                        new MiniDbException(MiniDbException.Phase.SEMANTIC, f.pos(),
+                                "聚合参数类型不支持: " + f.func() + "(" + argType + ")"));
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Update
+    // ------------------------------------------------------------------
+
+    private void checkUpdate(UpdateStmt s) throws MiniDbException {
+        TableDef table = requireTable(s.tableName(), s.pos());
+        for (SetClause sc : s.sets()) {
+            ColumnDef col = resolveColumn(table.tableName(), sc.column());
+            // SET 值类型检查（表达式推断）
+            DataType valType = infer(sc.value(), table.tableName());
+            if (valType != DataType.NULL && valType != col.type()) {
+                // INT→FLOAT 提升允许
+                if (!(col.type() == DataType.FLOAT && valType == DataType.INT)) {
+                    throw new MiniDbException(MiniDbException.Phase.SEMANTIC, sc.column().pos(),
+                            "SET 类型不匹配: 列 " + col.name() + "(" + col.type() + "), 值类型 " + valType);
+                }
+            }
+        }
+        if (s.where() != null) {
+            rejectAggregateInWhere(s.where());
+            requireBooleanWhere(s.where(), table.tableName());
         }
     }
 
@@ -258,6 +339,89 @@ public class SemanticAnalyzer {
         }
     }
 
+    /** 多表 WHERE/ON 布尔检查。 */
+    private void requireBooleanWhere(Expression where, List<String> tableNames) throws MiniDbException {
+        // 简化：用第一个表做 infer（多表列解析在 inferMulti 中处理）
+        // 这里需要一个多表 infer
+        DataType t = inferMulti(where, tableNames, null, null);
+        if (t != DataType.BOOLEAN) {
+            throw new MiniDbException(MiniDbException.Phase.SEMANTIC, where.pos(),
+                    "WHERE 条件必须是 BOOLEAN, 实际是 " + t);
+        }
+    }
+
+    /** 多表类型推断（JOIN 场景）。 */
+    private DataType inferMulti(Expression expr, List<String> tableNames,
+                                 TableDef left, TableDef right) throws MiniDbException {
+        return switch (expr) {
+            case Literal lit -> lit.type();
+            case ColumnRef ref -> resolveColumnMulti(ref, tableNames, left, right).type();
+            case BinaryExpr b -> {
+                DataType lt = inferMulti(b.left(), tableNames, left, right);
+                DataType rt = inferMulti(b.right(), tableNames, left, right);
+                Optional<DataType> result = switch (b.op()) {
+                    case AND, OR -> TypeRules.logical(lt, rt);
+                    case EQ, NE, LT, LE, GT, GE -> TypeRules.comparison(lt, rt);
+                    case ADD, SUB, MUL, DIV -> TypeRules.arithmetic(lt, rt);
+                };
+                yield result.orElseThrow(() -> new MiniDbException(
+                        MiniDbException.Phase.SEMANTIC, b.pos(),
+                        "类型不匹配: " + lt + " " + b.op() + " " + rt));
+            }
+            case UnaryExpr u -> {
+                DataType ot = inferMulti(u.operand(), tableNames, left, right);
+                yield TypeRules.unary(u.op(), ot).orElseThrow(() -> new MiniDbException(
+                        MiniDbException.Phase.SEMANTIC, u.pos(),
+                        "类型不匹配: " + u.op() + " " + ot));
+            }
+            case FuncCall f -> throw new MiniDbException(MiniDbException.Phase.SEMANTIC, f.pos(),
+                    "嵌套聚合函数不支持: " + f.display());
+        };
+    }
+
+    /** 多表列解析：限定名按表名解析，非限定名在唯一时解析、二义时报错。 */
+    private ColumnDef resolveColumnMulti(ColumnRef ref, List<String> tableNames,
+                                          TableDef left, TableDef right) throws MiniDbException {
+        if (ref.table() != null) {
+            // 限定名：找到对应表
+            TableDef tdef = null;
+            for (String tn : tableNames) {
+                if (tn.equalsIgnoreCase(ref.table())) {
+                    tdef = catalog.findTable(tn).orElse(null);
+                    break;
+                }
+            }
+            if (tdef == null) {
+                throw new MiniDbException(MiniDbException.Phase.SEMANTIC, ref.pos(),
+                        "未知表: " + ref.table());
+            }
+            return tdef.columns().stream()
+                    .filter(c -> c.name().equalsIgnoreCase(ref.column()))
+                    .findFirst()
+                    .orElseThrow(() -> new MiniDbException(MiniDbException.Phase.SEMANTIC, ref.pos(),
+                            "列不存在: " + ref.table() + "." + ref.column()));
+        }
+        // 非限定名：在所有表中查找
+        ColumnDef found = null;
+        String foundTable = null;
+        for (String tn : tableNames) {
+            Optional<ColumnDef> col = catalog.findColumn(tn, ref.column());
+            if (col.isPresent()) {
+                if (found != null) {
+                    throw new MiniDbException(MiniDbException.Phase.SEMANTIC, ref.pos(),
+                            "列引用二义: " + ref.column() + " 在多个表中存在");
+                }
+                found = col.get();
+                foundTable = tn;
+            }
+        }
+        if (found == null) {
+            throw new MiniDbException(MiniDbException.Phase.SEMANTIC, ref.pos(),
+                    "列不存在: " + ref.column());
+        }
+        return found;
+    }
+
     // ------------------------------------------------------------------
     // 共用
     // ------------------------------------------------------------------
@@ -277,4 +441,5 @@ public class SemanticAnalyzer {
                 .orElseThrow(() -> new MiniDbException(MiniDbException.Phase.SEMANTIC, ref.pos(),
                         "列不存在: " + ref.column()));
     }
+
 }

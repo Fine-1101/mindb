@@ -45,3 +45,41 @@ SELECT COUNT(*), AVG(score) FROM student WHERE score >= 80.0;
 
 -- 11. DISTINCT 去重（保留首次出现顺序）
 SELECT DISTINCT name FROM student;
+
+-- ============================================
+-- D5 五大特性演示：UPDATE / ORDER BY / NULL / GROUP BY / JOIN
+-- ============================================
+
+-- 12. UPDATE：将 Tom 的分数更新为 92.0
+UPDATE student SET score = 92.0 WHERE name = 'Tom';
+SELECT name, score FROM student WHERE name = 'Tom';
+
+-- 13. ORDER BY：按分数降序排列
+SELECT name, score FROM student ORDER BY score DESC;
+
+-- 14. NULL 支持：插入含 NULL 的行 + IS [NOT] NULL 查询
+INSERT INTO student VALUES (6, 'Eve', NULL);
+SELECT name, score FROM student WHERE score IS NULL;
+SELECT name, score FROM student WHERE score IS NOT NULL;
+
+-- 15. GROUP BY：建第二张表并按部门分组聚合
+CREATE TABLE emp (id INT, name VARCHAR(20), dept VARCHAR(10), salary INT);
+INSERT INTO emp VALUES
+    (1, 'Alice', 'Eng', 100),
+    (2, 'Bob', 'Eng', 120),
+    (3, 'Charlie', 'Sales', 80),
+    (4, 'Dave', 'Sales', 90),
+    (5, 'Eve', 'Eng', 110);
+SELECT dept, COUNT(*), SUM(salary), AVG(salary) FROM emp GROUP BY dept;
+
+-- 16. JOIN：员工与部门表连接
+CREATE TABLE dept (id INT, dept_name VARCHAR(20));
+INSERT INTO dept VALUES (1, 'Engineering'), (2, 'Sales');
+SELECT emp.name, dept.dept_name FROM emp JOIN dept ON emp.dept = dept.dept_name;
+
+-- 17. 组合：JOIN + ORDER BY
+SELECT emp.name, dept.dept_name FROM emp JOIN dept ON emp.dept = dept.dept_name ORDER BY emp.name ASC;
+
+-- 18. 组合：UPDATE 后聚合
+UPDATE emp SET salary = 130 WHERE name = 'Alice';
+SELECT dept, SUM(salary) FROM emp GROUP BY dept;

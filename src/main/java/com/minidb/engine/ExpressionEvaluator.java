@@ -39,11 +39,22 @@ public final class ExpressionEvaluator {
         return switch (expr) {
             case Literal lit -> lit.value();
             case ColumnRef ref -> {
-                String key = ref.column().toLowerCase();
+                String key;
+                if (ref.table() != null) {
+                    key = ref.table().toLowerCase() + "." + ref.column().toLowerCase();
+                } else {
+                    key = ref.column().toLowerCase();
+                }
                 Integer idx = columns.get(key);
                 if (idx == null) {
+                    // 回退：限定名找不到时尝试非限定名
+                    if (ref.table() != null) {
+                        idx = columns.get(ref.column().toLowerCase());
+                    }
+                }
+                if (idx == null) {
                     throw new MiniDbException(MiniDbException.Phase.PLAN, ref.pos(),
-                            "列不存在: " + ref.column());
+                            "列不存在: " + (ref.table() != null ? ref.table() + "." : "") + ref.column());
                 }
                 yield row[idx];
             }
@@ -61,23 +72,30 @@ public final class ExpressionEvaluator {
 
     private static Object evaluateBinary(BinaryExpr b, Map<String, Integer> columns, Object[] row)
             throws MiniDbException {
-        // 短路求值：AND / OR
+        // 三值逻辑短路求值：AND / OR（拍板 5）
         if (b.op() == BinaryOp.AND) {
             Object left = evaluate(b.left(), columns, row);
-            if (Boolean.FALSE.equals(left)) return false;  // 左假右不判
+            if (Boolean.FALSE.equals(left)) return false;  // F 短路
             Object right = evaluate(b.right(), columns, row);
+            if (Boolean.FALSE.equals(right)) return false;  // F 短路
+            if (left == null || right == null) return null;  // NULL + T = NULL
             return toBoolean(left) && toBoolean(right);
         }
         if (b.op() == BinaryOp.OR) {
             Object left = evaluate(b.left(), columns, row);
-            if (Boolean.TRUE.equals(left)) return true;  // 左真右不判
+            if (Boolean.TRUE.equals(left)) return true;  // T 短路
             Object right = evaluate(b.right(), columns, row);
+            if (Boolean.TRUE.equals(right)) return true;  // T 短路
+            if (left == null || right == null) return null;  // NULL + F = NULL
             return toBoolean(left) || toBoolean(right);
         }
 
-        // 比较运算
+        // 比较运算（NULL 参与 → 返回 null，三值逻辑）
         Object left = evaluate(b.left(), columns, row);
         Object right = evaluate(b.right(), columns, row);
+        if (left == null || right == null) {
+            return null;  // NULL 参与任何比较 → null
+        }
         return switch (b.op()) {
             case EQ -> compareValues(left, right) == 0;
             case NE -> compareValues(left, right) != 0;
@@ -103,16 +121,17 @@ public final class ExpressionEvaluator {
             throws MiniDbException {
         Object operand = evaluate(u.operand(), columns, row);
         return switch (u.op()) {
-            case NOT -> !toBoolean(operand);
+            case NOT -> operand == null ? null : !toBoolean(operand);
             case NEG -> switch (operand) {
+                case null -> null;
                 case Integer i -> -i;
                 case Double d -> -d;
                 default -> throw new MiniDbException(MiniDbException.Phase.PLAN, u.pos(),
                         "NEG 不支持类型: " + operand.getClass().getSimpleName());
             };
-            // D5 M0 桩：IS [NOT] NULL 求值（并行阶段实现，M0 无该运算产生）
-            case IS_NULL, IS_NOT_NULL -> throw new MiniDbException(MiniDbException.Phase.PLAN, u.pos(),
-                    "IS NULL 求值未实现（D5 并行阶段）");
+            // IS [NOT] NULL（拍板 8）
+            case IS_NULL -> operand == null;
+            case IS_NOT_NULL -> operand != null;
         };
     }
 
@@ -120,11 +139,11 @@ public final class ExpressionEvaluator {
     // 比较与算术辅助
     // ------------------------------------------------------------------
 
-    /** 统一数值比较：INT/DOUBLE 可互比，VARCHAR 按字典序。null 参与比较返回 null（SQL 三值逻辑暂不支持）。 */
+    /** 统一数值比较：INT/DOUBLE 可互比，VARCHAR 按字典序。null 参与比较抛异常（由调用方捕获返回 null）。 */
     private static int compareValues(Object left, Object right) throws MiniDbException {
         if (left == null || right == null) {
-            throw new MiniDbException(MiniDbException.Phase.PLAN, null,
-                    "NULL 参与比较");
+            // NULL 参与比较 → 三值逻辑返回 null（调用方处理）
+            throw new NullCompareException();
         }
         // 数值统一为 double 比较
         if (left instanceof Number && right instanceof Number) {
@@ -141,8 +160,7 @@ public final class ExpressionEvaluator {
 
     private static Object arithmetic(Object left, Object right, char op) throws MiniDbException {
         if (left == null || right == null) {
-            throw new MiniDbException(MiniDbException.Phase.PLAN, null,
-                    "NULL 参与算术运算");
+            return null;  // NULL 参与算术 → NULL
         }
         // INT op INT → INT
         if (left instanceof Integer li && right instanceof Integer ri) {
@@ -174,8 +192,15 @@ public final class ExpressionEvaluator {
     }
 
     private static boolean toBoolean(Object value) {
+        if (value == null) return false;  // NULL 当 false 处理（WHERE 过滤）
         if (value instanceof Boolean b) return b;
-        throw new ClassCastException("期望 BOOLEAN，实际: "
-                + (value == null ? "null" : value.getClass().getSimpleName()));
+        throw new ClassCastException("期望 BOOLEAN，实际: " + value.getClass().getSimpleName());
+    }
+
+    /** NULL 参与比较时抛出的内部异常，用于流程控制。 */
+    static class NullCompareException extends MiniDbException {
+        NullCompareException() {
+            super(Phase.PLAN, null, "NULL_COMPARE");
+        }
     }
 }

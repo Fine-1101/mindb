@@ -30,13 +30,18 @@ public final class TypeRules {
         DataType.VARCHAR, Map.of(
             DataType.VARCHAR, DataType.BOOLEAN));
 
-    /** 算术运算（+ - * /）：数值组合按 INT+INT→INT、含 FLOAT→FLOAT 提升；含 VARCHAR/BOOLEAN → empty。 */
+    /** 算术运算（+ - * /）：数值组合按 INT+INT→INT、含 FLOAT→FLOAT 提升；含 NULL → 对方类型；含 VARCHAR/BOOLEAN → empty。 */
     public static Optional<DataType> arithmetic(DataType left, DataType right) {
+        if (left == DataType.NULL) return Optional.of(right);
+        if (right == DataType.NULL) return Optional.of(left);
         return Optional.ofNullable(ARITHMETIC.getOrDefault(left, Map.of()).get(right));
     }
 
-    /** 比较运算（= != < <= > >=）：数值×数值 或 VARCHAR×VARCHAR → BOOLEAN；跨类 → empty。 */
+    /** 比较运算（= != < <= > >=）：数值×数值 或 VARCHAR×VARCHAR → BOOLEAN；含 NULL → BOOLEAN；跨类 → empty。 */
     public static Optional<DataType> comparison(DataType left, DataType right) {
+        if (left == DataType.NULL || right == DataType.NULL) {
+            return Optional.of(DataType.BOOLEAN);
+        }
         return Optional.ofNullable(COMPARISON.getOrDefault(left, Map.of()).get(right));
     }
 

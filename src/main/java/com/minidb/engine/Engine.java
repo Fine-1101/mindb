@@ -1,6 +1,5 @@
 package com.minidb.engine;
 
-import com.minidb.ast.Expression;
 import com.minidb.ast.FuncCall;
 import com.minidb.ast.Literal;
 import com.minidb.buffer.BufferPool;
@@ -29,12 +28,10 @@ import java.util.Map;
 /**
  * 执行引擎入口。
  *
- * <p>{@link #execute(PlanNode)} 处理 DDL/DML（CREATE / INSERT / DELETE），返回 void。
+ * <p>{@link #execute(PlanNode)} 处理 DDL/DML（CREATE / INSERT / DELETE / UPDATE），返回 void。
  * <p>{@link #executeQuery(PlanNode)} 处理查询（SELECT），返回行集 {@code List<Object[]>}。
  *
- * <p>SELECT/DELETE 执行器采用火山模型：SeqScan → Filter → Project。
- *
- * <p>表→页映射：Engine 内 Map&lt;String, List&lt;Integer&gt;&gt;。
+ * <p>火山模型执行器树：SeqScan / Filter / Project / Aggregate / Sort / Join。
  */
 public class Engine {
 
@@ -51,34 +48,36 @@ public class Engine {
 
     /**
      * 执行 DDL/DML 计划节点。
-     *
-     * @param plan CreateTablePlan / InsertPlan / DeletePlan
-     * @throws MiniDbException 执行失败
+     * @return UPDATE 时返回更新行数，其它语句返回 null。
      */
-    public void execute(PlanNode plan) throws MiniDbException {
-        switch (plan) {
-            case CreateTablePlan p -> executeCreateTable(p);
-            case InsertPlan p -> executeInsert(p);
-            case DeletePlan p -> executeDelete(p);
+    public Integer execute(PlanNode plan) throws MiniDbException {
+        return switch (plan) {
+            case CreateTablePlan p -> { executeCreateTable(p); yield null; }
+            case InsertPlan p -> { executeInsert(p); yield null; }
+            case DeletePlan p -> { executeDelete(p); yield null; }
+            case UpdatePlan p -> executeUpdate(p);
             default -> throw new MiniDbException(MiniDbException.Phase.PLAN, null,
                     "不支持的计划类型: " + plan.getClass().getSimpleName());
-        }
+        };
+    }
+
+    /** 执行 UPDATE 计划（两阶段，拍板 3），返回更新行数。 */
+    private int executeUpdate(UpdatePlan plan) throws MiniDbException {
+        String tableNameKey = plan.tableName().toLowerCase();
+        List<Integer> pageIds = tablePages.getOrDefault(tableNameKey, List.of());
+        List<ColumnDef> columnDefs = getColumnDefs(plan.tableName());
+        UpdateExecutor updater = new UpdateExecutor(pool, tableNameKey, pageIds, columnDefs,
+                plan.sets(), plan.condition());
+        return updater.execute();
     }
 
     /**
      * 执行查询计划节点，返回结果行集。
-     *
-     * @param plan SELECT 计划树（Project → Filter → SeqScan 的任意组合）
-     * @return 查询结果行集，每行为 Object[]
-     * @throws MiniDbException 执行失败
      */
     public List<Object[]> executeQuery(PlanNode plan) throws MiniDbException {
-        // 从计划树构建执行器树
-        String tableName = findTableName(plan);
-        List<String> allColumnNames = getColumnNames(tableName);
-        Executor executor = buildExecutor(plan, allColumnNames);
+        List<String> colNames = getPlanColumnNames(plan);
+        Executor executor = buildExecutor(plan, colNames);
 
-        // 火山模型：open → next → close
         List<Object[]> results = new ArrayList<>();
         executor.open();
         Object[] row;
@@ -91,63 +90,70 @@ public class Engine {
 
     /**
      * 查询结果的列名（供 CLI 打印表头）。
-     *
-     * @param plan SELECT 计划树
-     * @return 输出列名列表
      */
-    public List<String> getQueryColumnNames(PlanNode plan) {
+    public List<String> getQueryColumnNames(PlanNode plan) throws MiniDbException {
+        return getPlanColumnNames(plan);
+    }
+
+    // ------------------------------------------------------------------
+    // 递归计算计划树输出列名
+    // ------------------------------------------------------------------
+
+    private List<String> getPlanColumnNames(PlanNode plan) throws MiniDbException {
         return switch (plan) {
+            case SeqScan s -> getColumnNames(s.tableName());
+            case Filter f -> getPlanColumnNames(f.child());
             case Project p -> {
                 if (p.columns() != null) {
                     yield p.columns();
                 }
-                yield getChildColumnNames(p.child());
+                yield getPlanColumnNames(p.child());
             }
-            case AggregatePlan a -> a.aggregates().stream().map(FuncCall::display).toList();
-            case Filter f -> getChildColumnNames(f.child());
-            case SeqScan s -> getColumnNames(s.tableName());
-            // D5 M0 透传：Sort 列不变；Join 合成行 = 左列 ++ 右列
-            case SortPlan s -> getChildColumnNames(s.child());
-            case JoinPlan j -> {
-                List<String> all = new ArrayList<>(getChildColumnNames(j.left()));
-                all.addAll(getChildColumnNames(j.right()));
-                yield all;
+            case AggregatePlan a -> {
+                List<String> names = new ArrayList<>();
+                if (a.groupBy() != null) {
+                    names.addAll(a.groupBy());
+                }
+                for (FuncCall f : a.aggregates()) {
+                    names.add(f.display());
+                }
+                yield names;
+            }
+            case SortPlan s -> getPlanColumnNames(s.child());
+            case JoinPlan jp -> {
+                List<String> names = new ArrayList<>();
+                String leftTable = findTableName(jp.left());
+                for (String c : getPlanColumnNames(jp.left())) {
+                    names.add(leftTable.toLowerCase() + "." + c.toLowerCase());
+                }
+                String rightTable = findTableName(jp.right());
+                for (String c : getPlanColumnNames(jp.right())) {
+                    names.add(rightTable.toLowerCase() + "." + c.toLowerCase());
+                }
+                yield names;
             }
             default -> List.of();
         };
     }
 
-    private List<String> getChildColumnNames(PlanNode node) {
-        return switch (node) {
-            case Project p -> {
-                if (p.columns() != null) {
-                    yield p.columns();
-                }
-                yield getChildColumnNames(p.child());
-            }
-            case AggregatePlan a -> a.aggregates().stream().map(FuncCall::display).toList();
-            case Filter f -> getChildColumnNames(f.child());
-            case SeqScan s -> getColumnNames(s.tableName());
-            // D5 M0 透传：Sort 列不变；Join 合成行 = 左列 ++ 右列
-            case SortPlan s -> getChildColumnNames(s.child());
-            case JoinPlan j -> {
-                List<String> all = new ArrayList<>(getChildColumnNames(j.left()));
-                all.addAll(getChildColumnNames(j.right()));
-                yield all;
-            }
-            default -> List.of();
+    private String findTableName(PlanNode plan) throws MiniDbException {
+        return switch (plan) {
+            case SeqScan s -> s.tableName();
+            case Filter f -> findTableName(f.child());
+            case Project p -> findTableName(p.child());
+            case AggregatePlan a -> findTableName(a.input());
+            case SortPlan s -> findTableName(s.child());
+            case JoinPlan j -> findTableName(j.left());
+            default -> throw new MiniDbException(MiniDbException.Phase.PLAN, null,
+                    "无法确定表名: " + plan.getClass().getSimpleName());
         };
     }
 
     // ------------------------------------------------------------------
-    // 执行器构建（计划树 → 执行器树）
+    // 执行器构建（每个执行器从子计划自行计算列名）
     // ------------------------------------------------------------------
 
-    /**
-     * 递归构建执行器。
-     * @param availableColumns 当前层级可用的列名列表（从 SeqScan 向上传递）
-     */
-    private Executor buildExecutor(PlanNode plan, List<String> availableColumns) throws MiniDbException {
+    private Executor buildExecutor(PlanNode plan, List<String> parentColumns) throws MiniDbException {
         return switch (plan) {
             case SeqScan s -> {
                 List<Integer> pageIds = tablePages.getOrDefault(s.tableName().toLowerCase(), List.of());
@@ -155,38 +161,37 @@ public class Engine {
                 yield new SeqScanExecutor(pool, s.tableName().toLowerCase(), pageIds, cols);
             }
             case Filter f -> {
-                Executor child = buildExecutor(f.child(), availableColumns);
-                yield new FilterExecutor(child, f.condition(), availableColumns);
+                List<String> childCols = getPlanColumnNames(f.child());
+                Executor child = buildExecutor(f.child(), childCols);
+                yield new FilterExecutor(child, f.condition(), childCols);
             }
             case Project p -> {
-                Executor child = buildExecutor(p.child(), availableColumns);
-                yield new ProjectExecutor(child, p.columns(), availableColumns, p.distinct());
+                List<String> childCols = getPlanColumnNames(p.child());
+                Executor child = buildExecutor(p.child(), childCols);
+                yield new ProjectExecutor(child, p.columns(), childCols, p.distinct());
             }
             case AggregatePlan a -> {
-                Executor input = buildExecutor(a.input(), availableColumns);
-                yield new AggregateExecutor(input, a.aggregates(), availableColumns);
+                List<String> childCols = getPlanColumnNames(a.input());
+                Executor child = buildExecutor(a.input(), childCols);
+                yield new AggregateExecutor(child, a.aggregates(), a.groupBy(), childCols);
             }
-            // D5 M0 桩：Sort（稳定排序，NULL 最小）与 Join（嵌套循环，双注册列映射）在并行阶段实现
-            case SortPlan s -> throw new MiniDbException(MiniDbException.Phase.PLAN, null,
-                    "Sort 执行器未实现（D5 并行阶段）");
-            case JoinPlan j -> throw new MiniDbException(MiniDbException.Phase.PLAN, null,
-                    "Join 执行器未实现（D5 并行阶段）");
+            case SortPlan s -> {
+                List<String> childCols = getPlanColumnNames(s.child());
+                Executor child = buildExecutor(s.child(), childCols);
+                yield new SortExecutor(child, s.keys(), childCols);
+            }
+            case JoinPlan jp -> {
+                String leftTableName = findTableName(jp.left());
+                String rightTableName = findTableName(jp.right());
+                List<String> leftCols = getColumnNames(leftTableName);
+                List<String> rightCols = getColumnNames(rightTableName);
+                Executor leftExec = buildExecutor(jp.left(), leftCols);
+                Executor rightExec = buildExecutor(jp.right(), rightCols);
+                yield new NestedLoopJoinExecutor(leftExec, rightExec, jp.condition(),
+                        leftTableName, rightTableName, leftCols, rightCols);
+            }
             default -> throw new MiniDbException(MiniDbException.Phase.PLAN, null,
                     "查询计划不支持: " + plan.getClass().getSimpleName());
-        };
-    }
-
-    /** 从计划树中找到底层的表名。 */
-    private String findTableName(PlanNode plan) throws MiniDbException {
-        return switch (plan) {
-            case SeqScan s -> s.tableName();
-            case Filter f -> findTableName(f.child());
-            case Project p -> findTableName(p.child());
-            case AggregatePlan a -> findTableName(a.input());
-            // Sort 列不变透传；Join 双表语义由并行阶段重构（单表名不适用）
-            case SortPlan s -> findTableName(s.child());
-            default -> throw new MiniDbException(MiniDbException.Phase.PLAN, null,
-                    "无法确定表名: " + plan.getClass().getSimpleName());
         };
     }
 
@@ -211,7 +216,6 @@ public class Engine {
 
         List<ColumnDef> allColumns = tableDef.columns();
 
-        // 按 targetColumns 序构建对应的 ColumnDef 列表
         List<ColumnDef> targetColumnDefs;
         if (plan.targetColumns().isEmpty()) {
             targetColumnDefs = allColumns;
@@ -227,14 +231,12 @@ public class Engine {
             }
         }
 
-        // 获取或创建首页
         List<Integer> pageIds = tablePages.computeIfAbsent(tableNameKey, k -> new ArrayList<>());
         if (pageIds.isEmpty()) {
             Page newPage = pool.newPage(tableNameKey);
             pageIds.add(newPage.pageId());
         }
 
-        // 逐行插入
         for (List<com.minidb.ast.Expression> row : plan.rows()) {
             Object[] values = new Object[row.size()];
             for (int i = 0; i < row.size(); i++) {
@@ -249,7 +251,6 @@ public class Engine {
 
             byte[] encoded = RowEncoder.encode(targetColumnDefs, values);
 
-            // 尝试插入当前最后一页
             int lastPageId = pageIds.get(pageIds.size() - 1);
             Page currentPage = pool.getPage(tableNameKey, lastPageId);
             if (currentPage == null) {
@@ -259,7 +260,6 @@ public class Engine {
             int slot = currentPage.insertRow(encoded);
 
             if (slot == -1) {
-                // 当前页满，新建页
                 Page newPage = pool.newPage(tableNameKey);
                 pageIds.add(newPage.pageId());
                 slot = newPage.insertRow(encoded);
@@ -281,23 +281,20 @@ public class Engine {
         List<ColumnDef> columnDefs = getColumnDefs(plan.tableName());
         List<String> columnNames = columnDefs.stream().map(ColumnDef::name).toList();
 
-        // 构建列名→索引映射
         Map<String, Integer> colMap = new HashMap<>();
         for (int i = 0; i < columnNames.size(); i++) {
             colMap.put(columnNames.get(i).toLowerCase(), i);
         }
 
-        // 逐页逐槽扫描，命中则 deleteRow
         for (int pageId : pageIds) {
             Page page = pool.getPage(tableNameKey, pageId);
             if (page == null) continue;
 
             for (int slot = 0; slot < page.slotCount(); slot++) {
                 byte[] raw = page.readRow(slot);
-                if (raw == null) continue;  // 已删除
+                if (raw == null) continue;
 
                 if (plan.condition() == null) {
-                    // 无 WHERE → 全删
                     page.deleteRow(slot);
                 } else {
                     Object[] values = RowEncoder.decode(columnDefs, raw);
@@ -333,7 +330,7 @@ public class Engine {
         return tablePages.getOrDefault(tableName.toLowerCase(), List.of());
     }
 
-    /** 重启恢复：按磁盘文件页数重建表的页映射（页 id 0..n-1，由文件长度推导）。 */
+    /** 重启恢复：按磁盘文件页数重建表的页映射。 */
     public void recoverTablePages(String tableName, int pageCount) {
         String key = tableName.toLowerCase();
         List<Integer> ids = new ArrayList<>();

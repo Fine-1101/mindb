@@ -5,6 +5,10 @@ import com.minidb.buffer.BufferPoolStats;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.minidb.catalog.ColumnDef;
+import com.minidb.common.DataType;
+import com.minidb.engine.RowEncoder;
+import java.util.List;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -35,6 +39,8 @@ class DiskPageTest {
         }
         try {
             Files.deleteIfExists(Paths.get("data", TEST_TABLE + ".dat"));
+            Files.deleteIfExists(Paths.get("data", "table_a.dat"));
+            Files.deleteIfExists(Paths.get("data", "table_b.dat"));
         } catch (IOException e) {
             // ignore
         }
@@ -154,5 +160,125 @@ class DiskPageTest {
         // 不存在的 pageId 返回 null（兜底）
         Page missing = pool.getPage(TEST_TABLE, 100);
         assertNull(missing);
+    }
+
+    // 在 DiskPageTest.java 中新增
+
+    @Test
+    void updatePersistsAcrossRestart() throws IOException {
+        // 拍板2：UPDATE 后 close→重启→数据一致（含变长 VARCHAR 搬家行）
+        List<ColumnDef> columns = List.of(
+                new ColumnDef("id", DataType.INT, 0),
+                new ColumnDef("name", DataType.VARCHAR, 64));
+
+        // 第一页：插入 3 行
+        Page page = pool.newPage(TEST_TABLE);
+        byte[] row1 = RowEncoder.encode(columns, new Object[]{1, "short"});
+        byte[] row2 = RowEncoder.encode(columns, new Object[]{2, "Alice"});
+        byte[] row3 = RowEncoder.encode(columns, new Object[]{3, "Bob"});
+        page.insertRow(row1);
+        page.insertRow(row2);
+        page.insertRow(row3);
+
+        pool.flushAll();
+
+        // 模拟 UPDATE：deleteRow(1) + insertRow(变长新行)
+        String longName = "A_very_long_name_that_might_need_more_space_than_before_1234567890";
+        byte[] newRow2 = RowEncoder.encode(columns, new Object[]{2, longName});
+        page.deleteRow(1);
+        int newSlot = page.insertRow(newRow2);
+        assertTrue(newSlot >= 0, "UPDATE 新行应该插入成功");
+
+        pool.flushAll();
+        pool.close();
+
+        // 重启
+        pool = new DiskBufferPool(3);
+        Page loadedPage = pool.getPage(TEST_TABLE, 0);
+        assertNotNull(loadedPage, "重启后页应该存在");
+
+        // 验证：旧行已删，新行可读
+        assertNull(loadedPage.readRow(1), "UPDATE 后旧行应该为 null");
+
+        // 验证其他行完整
+        Object[] decoded0 = RowEncoder.decode(columns, loadedPage.readRow(0));
+        assertEquals(1, decoded0[0]);
+        assertEquals("short", decoded0[1]);
+
+        Object[] decoded2 = RowEncoder.decode(columns, loadedPage.readRow(2));
+        assertEquals(3, decoded2[0]);
+        assertEquals("Bob", decoded2[1]);
+
+        // 验证新行（变长 VARCHAR 搬家行）
+        Object[] decodedNew = RowEncoder.decode(columns, loadedPage.readRow(newSlot));
+        assertEquals(2, decodedNew[0]);
+        assertEquals(longName, decodedNew[1]);
+    }
+
+    @Test
+    void nullPersistsAcrossRestart() throws IOException {
+        // 拍板4：NULL 落盘不丢
+        List<ColumnDef> columns = List.of(
+                new ColumnDef("id", DataType.INT, 0),
+                new ColumnDef("score", DataType.FLOAT, 0),
+                new ColumnDef("name", DataType.VARCHAR, 32));
+
+        Page page = pool.newPage(TEST_TABLE);
+        Object[][] values = {
+                {1, 95.5, "Alice"},
+                {null, 88.0, "Bob"},
+                {3, null, "Carol"},
+                {4, 72.5, null},
+                {null, null, null},
+        };
+        for (Object[] v : values) {
+            page.insertRow(RowEncoder.encode(columns, v));
+        }
+
+        pool.flushAll();
+        pool.close();
+
+        // 重启
+        pool = new DiskBufferPool(3);
+        Page loadedPage = pool.getPage(TEST_TABLE, 0);
+        assertNotNull(loadedPage, "重启后页应该存在");
+
+        // 验证 NULL 不丢
+        for (int i = 0; i < values.length; i++) {
+            Object[] decoded = RowEncoder.decode(columns, loadedPage.readRow(i));
+            assertArrayEquals(values[i], decoded,
+                    "第 " + i + " 行 NULL 值重启后应该保持");
+        }
+    }
+
+    @Test
+    void twoTablesCoexist() {
+        // 拍板10：双表页并存，互不干扰
+        Page pageA = pool.newPage("table_a");
+        Page pageB = pool.newPage("table_b");
+
+        byte[] rowA = new byte[]{1, 2, 3};
+        byte[] rowB = new byte[]{4, 5, 6, 7};
+
+        pageA.insertRow(rowA);
+        pageB.insertRow(rowB);
+
+        pool.flushAll();
+        pool.close();
+
+        // 重启
+        pool = new DiskBufferPool(3);
+        Page loadedA = pool.getPage("table_a", 0);
+        Page loadedB = pool.getPage("table_b", 0);
+
+        assertNotNull(loadedA, "table_a 页应该存在");
+        assertNotNull(loadedB, "table_b 页应该存在");
+
+        assertArrayEquals(rowA, loadedA.readRow(0), "table_a 数据应该完整");
+        assertArrayEquals(rowB, loadedB.readRow(0), "table_b 数据应该完整");
+
+        // 验证两表独立
+        assertEquals(1, loadedA.slotCount(), "table_a 应该有 1 行");
+        assertEquals(1, loadedB.slotCount(), "table_b 应该有 1 行");
     }
 }

@@ -105,7 +105,7 @@ public class LexerTest {
     }
 
     // ==================================================================
-    // 16 个 KW_* 全部识别 + 关键字优先于标识符
+    // 27 个 KW_* 全部识别 + 关键字优先于标识符
     // ==================================================================
 
     @Test
@@ -531,19 +531,19 @@ public class LexerTest {
         assertNotNull(sql, "samples.sql 资源不存在");
         List<Token> tokens = lex(sql);
 
-        // 整份文件可以切分：末尾为 EOF；恰好 11 条语句 => 11 个分号
+        // 整份文件可以切分：末尾为 EOF；恰好 15 条语句 => 15 个分号（D5 追加 UPDATE/JOIN/GROUP BY/ORDER BY）
         assertEquals(TokenType.EOF, tok(tokens, tokens.size() - 1).type());
         long semiCount = tokens.stream().filter(t -> t.type() == TokenType.SEMI).count();
-        assertEquals(11, semiCount);
+        assertEquals(15, semiCount);
 
-        // 16 个关键字在样例中全部出现且被正确识别（D4 加入 DISTINCT）
+        // 27 个关键字在样例中全部出现且被正确识别（D5 加入 UPDATE/SET/ORDER/BY/GROUP/JOIN/ON/NULL/IS/ASC/DESC）
         Set<TokenType> keywordTypes = EnumSet.noneOf(TokenType.class);
         for (Token t : tokens) {
             if (t.type().name().startsWith("KW_")) {
                 keywordTypes.add(t.type());
             }
         }
-        assertEquals(16, keywordTypes.size());
+        assertEquals(27, keywordTypes.size());
 
         // 转义字符串、中文、空字符串的字面量值正确
         boolean sawEscaped = false;
@@ -562,7 +562,7 @@ public class LexerTest {
     }
 
     // ==================================================================
-    // 演示 / 反馈部分：34 条用例（24 条固定 + samples.sql 10 条）
+    // 演示 / 反馈部分：38 条用例（24 条固定 + samples.sql 15 条，动态计数）
     // ==================================================================
 
     /** 单条演示用例：名称 + SQL + 是否期望抛 LEXER 错误。 */
@@ -577,7 +577,7 @@ public class LexerTest {
         List<DemoCase> cases = new ArrayList<>();
         cases.add(new DemoCase("T1 基本 SELECT", "SELECT * FROM t;", false));
         cases.add(new DemoCase("T2 关键字大小写不敏感", "SeLeCt * FrOm t;", false));
-        cases.add(new DemoCase("T3 15 个关键字全识别",
+        cases.add(new DemoCase("T3 27 个关键字全识别",
                 "create table insert into values select from where delete and or not int float varchar",
                 false));
         cases.add(new DemoCase("T4 标识符规则", "student _s1 Student student_name", false));
@@ -603,7 +603,7 @@ public class LexerTest {
         cases.add(new DemoCase("S1 超长标识符(1000+ 字符)",
                 "a" + "x".repeat(1000), false));
 
-        // samples.sql 的 10 条语句（资源存在时逐条加入）
+        // samples.sql 的 15 条语句（资源存在时逐条加入）
         String samples = readResource("/samples.sql");
         if (samples != null) {
             String[] parts = samples.split(";");

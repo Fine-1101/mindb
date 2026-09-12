@@ -83,6 +83,15 @@ class ParserFuzzTest {
         base.add("-- only comment\n/* block */");
         base.add(";;");
         base.add("INSERT INTO t VALUES (1), (2), (3);");
+        // D5 新语法模板：UPDATE / ORDER BY / GROUP BY / JOIN / IS [NOT] NULL / NULL / 限定列
+        base.add("UPDATE users SET score = score + 5 WHERE id = 1;");
+        base.add("UPDATE t SET name = NULL, score = score + 1 WHERE score IS NULL;");
+        base.add("SELECT * FROM users JOIN scores ON users.id = scores.id;");
+        base.add("SELECT u.id, s.id FROM u JOIN s ON u.id = s.id WHERE u.id IS NOT NULL;");
+        base.add("SELECT name, COUNT(*) FROM users WHERE score IS NOT NULL GROUP BY name ORDER BY name ASC, score DESC;");
+        base.add("SELECT DISTINCT name FROM t ORDER BY name DESC, id ASC;");
+        base.add("SELECT * FROM t WHERE a IS NULL OR (b IS NOT NULL AND c = NULL);");
+        base.add("INSERT INTO t VALUES (NULL, 1, 'x');");
         return base;
     }
 

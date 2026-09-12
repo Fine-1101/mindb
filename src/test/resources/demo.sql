@@ -47,46 +47,39 @@ SELECT COUNT(*), AVG(score) FROM student WHERE score >= 80.0;
 SELECT DISTINCT name FROM student;
 
 -- ============================================
--- D5 新特性演示（依赖 A/B 的 UPDATE/ORDER BY/NULL/GROUP BY/JOIN）
--- 注：以下语句需 Parser/Planner 支持对应特性后才能跑通
+-- D5 五大特性演示：UPDATE / ORDER BY / NULL / GROUP BY / JOIN
 -- ============================================
 
--- -- 12. UPDATE：SET score = score + 5 WHERE id = 1（拍板3：允许引用本行列）
--- UPDATE student SET score = score + 5.0 WHERE id = 1;
---
--- -- 13. UPDATE 后再查询
--- SELECT id, name, score FROM student WHERE id = 1;
---
--- -- 14. ORDER BY 单列 ASC
--- SELECT name, score FROM student ORDER BY score;
---
--- -- 15. ORDER BY 多列 + DESC
--- SELECT name, score FROM student ORDER BY score DESC, name ASC;
---
--- -- 16. ORDER BY + NULL 排序（拍板7：NULL 视为最小值）
--- INSERT INTO student VALUES (6, NULL, NULL);
--- SELECT id, name FROM student ORDER BY name ASC;
---
--- -- 17. IS NULL / IS NOT NULL（拍板8）
--- SELECT id, name FROM student WHERE name IS NULL;
--- SELECT id, name FROM student WHERE name IS NOT NULL;
---
--- -- 18. GROUP BY + 聚合（拍板12）
--- -- 注：需先有重复的 score 值
--- SELECT score, COUNT(*) FROM student GROUP BY score;
---
--- -- 19. JOIN 双表（拍板9）
--- -- 注：需先建 course 表并插入数据
--- CREATE TABLE enrollment (
---                             sid INT,
---                             cid INT
--- );
--- INSERT INTO enrollment VALUES (1, 101), (2, 101), (1, 102);
--- SELECT student.name, enrollment.cid
--- FROM student JOIN enrollment ON student.id = enrollment.sid;
---
--- -- 20. JOIN + WHERE + ORDER BY 组合
--- SELECT student.name, enrollment.cid
--- FROM student JOIN enrollment ON student.id = enrollment.sid
--- WHERE enrollment.cid = 101
--- ORDER BY student.name;
+-- 12. UPDATE：将 Tom 的分数更新为 92.0
+UPDATE student SET score = 92.0 WHERE name = 'Tom';
+SELECT name, score FROM student WHERE name = 'Tom';
+
+-- 13. ORDER BY：按分数降序排列
+SELECT name, score FROM student ORDER BY score DESC;
+
+-- 14. NULL 支持：插入含 NULL 的行 + IS [NOT] NULL 查询
+INSERT INTO student VALUES (6, 'Eve', NULL);
+SELECT name, score FROM student WHERE score IS NULL;
+SELECT name, score FROM student WHERE score IS NOT NULL;
+
+-- 15. GROUP BY：建第二张表并按部门分组聚合
+CREATE TABLE emp (id INT, name VARCHAR(20), dept VARCHAR(10), salary INT);
+INSERT INTO emp VALUES
+    (1, 'Alice', 'Eng', 100),
+    (2, 'Bob', 'Eng', 120),
+    (3, 'Charlie', 'Sales', 80),
+    (4, 'Dave', 'Sales', 90),
+    (5, 'Eve', 'Eng', 110);
+SELECT dept, COUNT(*), SUM(salary), AVG(salary) FROM emp GROUP BY dept;
+
+-- 16. JOIN：员工与部门表连接
+CREATE TABLE dept (id INT, dept_name VARCHAR(20));
+INSERT INTO dept VALUES (1, 'Engineering'), (2, 'Sales');
+SELECT emp.name, dept.dept_name FROM emp JOIN dept ON emp.dept = dept.dept_name;
+
+-- 17. 组合：JOIN + ORDER BY
+SELECT emp.name, dept.dept_name FROM emp JOIN dept ON emp.dept = dept.dept_name ORDER BY emp.name ASC;
+
+-- 18. 组合：UPDATE 后聚合
+UPDATE emp SET salary = 130 WHERE name = 'Alice';
+SELECT dept, SUM(salary) FROM emp GROUP BY dept;

@@ -11,7 +11,8 @@ import java.util.Map;
  * 标量聚合执行器（无 GROUP BY）：open 拉取子行流完成累计，next 输出单行后结束。
  *
  * <p>输出值序 = aggregates 书写序；arg 为表达式时逐行求值（复用 ExpressionEvaluator）。
- * 空表语义拍板（D4，无 NULL 支持）：COUNT/SUM/AVG/MIN/MAX → 0。
+ * 空值语义（D5 拍板 6，作废 D4 空表全 0 拍板）：COUNT(*) 数全部行、COUNT(col) 数非 NULL 值、
+ * COUNT 永不 NULL（空表→0）；SUM/AVG/MIN/MAX 忽略 NULL 输入，无任何非 NULL 输入→NULL。
  * SUM(INT)→Integer、SUM(FLOAT)/AVG→Double、COUNT→Integer、MIN/MAX 保持列值原类型。
  */
 public class AggregateExecutor implements Executor {
@@ -49,10 +50,17 @@ public class AggregateExecutor implements Executor {
             for (int i = 0; i < aggregates.size(); i++) {
                 FuncCall f = aggregates.get(i);
                 if ("COUNT".equals(f.func())) {
-                    counts[i]++;  // 无 NULL 支持：COUNT(col) 与 COUNT(*) 同为行数
+                    if (f.arg() == null) {
+                        counts[i]++;  // COUNT(*)：全部行
+                    } else if (ExpressionEvaluator.evaluate(f.arg(), columnMap, row) != null) {
+                        counts[i]++;  // COUNT(col)：非 NULL 值（拍板 6）
+                    }
                     continue;
                 }
                 Object v = ExpressionEvaluator.evaluate(f.arg(), columnMap, row);
+                if (v == null) {
+                    continue;  // SUM/AVG/MIN/MAX 忽略 NULL 输入（拍板 6）
+                }
                 switch (f.func()) {
                     case "SUM" -> sums[i] = add(sums[i], v);
                     case "AVG" -> {
@@ -71,10 +79,10 @@ public class AggregateExecutor implements Executor {
         Object[] out = new Object[aggregates.size()];
         for (int i = 0; i < aggregates.size(); i++) {
             out[i] = switch (aggregates.get(i).func()) {
-                case "COUNT" -> (int) counts[i];
-                case "SUM" -> sums[i] == null ? 0 : sums[i];
-                case "AVG" -> counts[i] == 0 ? 0 : ((Number) sums[i]).doubleValue() / counts[i];
-                default -> bests[i] == null ? 0 : bests[i];  // MIN / MAX
+                case "COUNT" -> (int) counts[i];       // 永不 NULL：空表/全 NULL → 0
+                case "SUM" -> sums[i];                 // 无非 NULL 输入 → null（拍板 6）
+                case "AVG" -> counts[i] == 0 ? null : ((Number) sums[i]).doubleValue() / counts[i];
+                default -> bests[i];                   // MIN / MAX 无值 → null
             };
         }
         this.result = out;

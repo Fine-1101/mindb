@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -59,10 +58,10 @@ class AggregateEndToEndTest {
     void emptyTableAggregatesReturnZero() {
         MiniDB db = new MiniDB();
         run(db, "CREATE TABLE t (a INT)");
-        // 空表拍板语义：COUNT/SUM/AVG/MIN/MAX → 0（无 NULL 支持，与标准 SQL 差异报告说明）
+        // D5 拍板 6（作废 D4 空表全 0 拍板）：COUNT→0（永不 NULL）；SUM/AVG/MIN/MAX 无非 NULL 输入→NULL
         String out = run(db, "SELECT COUNT(*), SUM(a), AVG(a), MIN(a), MAX(a) FROM t");
-        assertTrue(out.contains("0"), "空表聚合应为 0，实际: " + out);
-        assertFalse(out.contains("null"), "不应输出 null");
+        assertTrue(out.contains("0"), "空表 COUNT 应为 0，实际: " + out);
+        assertTrue(out.contains("NULL"), "空表 SUM/AVG/MIN/MAX 应为 NULL，实际: " + out);
     }
 
     @Test

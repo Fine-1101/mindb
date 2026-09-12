@@ -9,9 +9,12 @@ import com.minidb.ast.Expression;
 import com.minidb.ast.FuncCall;
 import com.minidb.ast.InsertStmt;
 import com.minidb.ast.Literal;
+import com.minidb.ast.OrderKey;
 import com.minidb.ast.SelectStmt;
+import com.minidb.ast.SetClause;
 import com.minidb.ast.UnaryExpr;
 import com.minidb.ast.UnaryOp;
+import com.minidb.ast.UpdateStmt;
 import com.minidb.catalog.Catalog;
 import com.minidb.catalog.ColumnDef;
 import com.minidb.catalog.MemoryCatalog;
@@ -593,5 +596,405 @@ class SemanticAnalyzerTest {
         assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
         assertEquals(p(1, 33), e.pos());
         assertTrue(e.getMessage().contains("core"));
+    }
+
+    // ==================================================================
+    // D5 五特性：UPDATE 四查（拍板 2/3/4）
+    // ==================================================================
+
+    @Test
+    void updateWithLiteralAndWherePasses() throws Exception {
+        // UPDATE student SET score = 95.0 WHERE id = 1
+        analyzer(studentCatalog()).analyze(new UpdateStmt("student",
+                List.of(new SetClause(new ColumnRef(null, "score", p(1, 20)),
+                        new Literal(95.0, DataType.FLOAT, p(1, 28)))),
+                idEqOne(1, 39, 45), p(1, 8)));
+    }
+
+    @Test
+    void updateTableMissingRejected() {
+        // UPDATE stuent SET score = 95.0 —— pos 是 stuent 的位置(1,8)
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new UpdateStmt("stuent",
+                        List.of(new SetClause(new ColumnRef(null, "score", p(1, 20)),
+                                new Literal(95.0, DataType.FLOAT, p(1, 28)))),
+                        null, p(1, 8))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 8), e.pos());
+        assertTrue(e.getMessage().contains("stuent"));
+    }
+
+    @Test
+    void updateUnknownSetColumnRejectedAtColumnPosition() {
+        // UPDATE student SET scroe = 95.0 —— pos 是 scroe 的位置(1,20)
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new UpdateStmt("student",
+                        List.of(new SetClause(new ColumnRef(null, "scroe", p(1, 20)),
+                                new Literal(95.0, DataType.FLOAT, p(1, 28)))),
+                        null, p(1, 8))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 20), e.pos());
+        assertTrue(e.getMessage().contains("scroe"));
+    }
+
+    @Test
+    void updateSetValueTypeMismatchRejectedAtValuePosition() {
+        // UPDATE student SET score = 'x' —— FLOAT 列给 VARCHAR，pos 是 'x'(1,28)
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new UpdateStmt("student",
+                        List.of(new SetClause(new ColumnRef(null, "score", p(1, 20)),
+                                new Literal("x", DataType.VARCHAR, p(1, 28)))),
+                        null, p(1, 8))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 28), e.pos());
+    }
+
+    @Test
+    void updateSetReferencingOwnColumnPasses() throws Exception {
+        // UPDATE student SET score = score + 5 WHERE id = 1 —— 拍板 3：SET 值可引用本行列
+        analyzer(studentCatalog()).analyze(new UpdateStmt("student",
+                List.of(new SetClause(new ColumnRef(null, "score", p(1, 20)),
+                        new BinaryExpr(new ColumnRef(null, "score", p(1, 29)), BinaryOp.ADD,
+                                new Literal(5, DataType.INT, p(1, 37)), p(1, 29)))),
+                idEqOne(1, 48, 54), p(1, 8)));
+    }
+
+    @Test
+    void updateSetNullAssignableToAnyColumnPasses() throws Exception {
+        // UPDATE student SET name = NULL, score = NULL, id = NULL —— 拍板 4：NULL 可赋任意列
+        analyzer(studentCatalog()).analyze(new UpdateStmt("student",
+                List.of(new SetClause(new ColumnRef(null, "name", p(1, 20)),
+                                new Literal(null, DataType.NULL, p(1, 27))),
+                        new SetClause(new ColumnRef(null, "score", p(1, 34)),
+                                new Literal(null, DataType.NULL, p(1, 43))),
+                        new SetClause(new ColumnRef(null, "id", p(1, 50)),
+                                new Literal(null, DataType.NULL, p(1, 55)))),
+                null, p(1, 8)));
+    }
+
+    @Test
+    void updateWhereNonBooleanRejected() {
+        // UPDATE student SET score = 95.0 WHERE id —— WHERE 是 INT 列
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new UpdateStmt("student",
+                        List.of(new SetClause(new ColumnRef(null, "score", p(1, 20)),
+                                new Literal(95.0, DataType.FLOAT, p(1, 28)))),
+                        new ColumnRef(null, "id", p(1, 39)), p(1, 8))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 39), e.pos());
+        assertTrue(e.getMessage().contains("INT"));
+    }
+
+    @Test
+    void updateVarcharOverMaxLengthRejected() {
+        // UPDATE student SET name = 'x'*51 —— 超过 VARCHAR(50)，重编码走 RowEncoder 上限
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new UpdateStmt("student",
+                        List.of(new SetClause(new ColumnRef(null, "name", p(1, 20)),
+                                new Literal("x".repeat(51), DataType.VARCHAR, p(1, 27)))),
+                        null, p(1, 8))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 27), e.pos());
+        assertTrue(e.getMessage().contains("超长"));
+    }
+
+    // ==================================================================
+    // D5 五特性：ORDER BY（拍板 7/11：键列存在 + 键 ⊆ SELECT 输出列）
+    // ==================================================================
+
+    @Test
+    void orderByOnSelectedColumnPasses() throws Exception {
+        // SELECT id, name FROM student ORDER BY name DESC, id ASC
+        analyzer(studentCatalog()).analyze(new SelectStmt(
+                List.of(new ColumnRef(null, "id", p(1, 8)),
+                        new ColumnRef(null, "name", p(1, 12))),
+                null, "student", null, false, null,
+                List.of(new OrderKey(new ColumnRef(null, "name", p(1, 41)), false),
+                        new OrderKey(new ColumnRef(null, "id", p(1, 54)), true)),
+                null, null, p(1, 24)));
+    }
+
+    @Test
+    void orderByOnStarPasses() throws Exception {
+        // SELECT * FROM student ORDER BY score DESC —— SELECT * 输出全部列，键存在即可
+        analyzer(studentCatalog()).analyze(new SelectStmt(null, null, "student", null, false,
+                null, List.of(new OrderKey(new ColumnRef(null, "score", p(1, 33)), false)),
+                null, null, p(1, 15)));
+    }
+
+    @Test
+    void orderByUnknownColumnRejectedAtColumnPosition() {
+        // SELECT id FROM student ORDER BY scroe —— pos 是 scroe 的位置(1,34)
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "id", p(1, 8))),
+                        null, "student", null, false, null,
+                        List.of(new OrderKey(new ColumnRef(null, "scroe", p(1, 34)), true)),
+                        null, null, p(1, 22))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 34), e.pos());
+        assertTrue(e.getMessage().contains("scroe"));
+    }
+
+    @Test
+    void orderByColumnNotInOutputRejected() {
+        // SELECT id FROM student ORDER BY name —— name 存在但不在 SELECT 输出列中
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "id", p(1, 8))),
+                        null, "student", null, false, null,
+                        List.of(new OrderKey(new ColumnRef(null, "name", p(1, 34)), true)),
+                        null, null, p(1, 22))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 34), e.pos());
+        assertTrue(e.getMessage().contains("输出"));
+    }
+
+    // ==================================================================
+    // D5 五特性：GROUP BY（拍板 12：键列存在 + SELECT 非聚合列 ⊆ 分组列集）
+    // ==================================================================
+
+    @Test
+    void groupByWithColumnAndAggregatePasses() throws Exception {
+        // SELECT name, COUNT(*) FROM student GROUP BY name
+        analyzer(studentCatalog()).analyze(new SelectStmt(
+                List.of(new ColumnRef(null, "name", p(1, 8))),
+                List.of(new FuncCall("COUNT", null, p(1, 15))),
+                "student", null, false,
+                List.of(new ColumnRef(null, "name", p(1, 44))),
+                null, null, null, p(1, 27)));
+    }
+
+    @Test
+    void groupByColumnNotInGroupRejectedAtColumnPosition() {
+        // SELECT name, COUNT(*) FROM student GROUP BY id —— name ⊄ {id}，pos 是 name(1,8)
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "name", p(1, 8))),
+                        List.of(new FuncCall("COUNT", null, p(1, 15))),
+                        "student", null, false,
+                        List.of(new ColumnRef(null, "id", p(1, 44))),
+                        null, null, null, p(1, 27))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 8), e.pos());
+        assertTrue(e.getMessage().contains("GROUP BY"));
+    }
+
+    @Test
+    void groupByStarRejected() {
+        // SELECT * FROM student GROUP BY id —— 拍板 12：GROUP BY 不支持 SELECT *
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(null, null, "student", null, false,
+                        List.of(new ColumnRef(null, "id", p(1, 34))),
+                        null, null, null, p(1, 15))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertTrue(e.getMessage().contains("SELECT *"));
+    }
+
+    @Test
+    void groupByUnknownColumnRejectedAtColumnPosition() {
+        // SELECT name, COUNT(*) FROM student GROUP BY naem —— pos 是 naem(1,44)
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(studentCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "name", p(1, 8))),
+                        List.of(new FuncCall("COUNT", null, p(1, 15))),
+                        "student", null, false,
+                        List.of(new ColumnRef(null, "naem", p(1, 44))),
+                        null, null, null, p(1, 27))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 44), e.pos());
+        assertTrue(e.getMessage().contains("naem"));
+    }
+
+    @Test
+    void groupByWithOrderByOnOutputColumnPasses() throws Exception {
+        // SELECT name, COUNT(*) FROM student GROUP BY name ORDER BY name ASC
+        analyzer(studentCatalog()).analyze(new SelectStmt(
+                List.of(new ColumnRef(null, "name", p(1, 8))),
+                List.of(new FuncCall("COUNT", null, p(1, 15))),
+                "student", null, false,
+                List.of(new ColumnRef(null, "name", p(1, 44))),
+                List.of(new OrderKey(new ColumnRef(null, "name", p(1, 58)), true)),
+                null, null, p(1, 27)));
+    }
+
+    // ==================================================================
+    // D5 五特性：JOIN（拍板 9/10：双表存在 / ON 布尔 / 限定名匹配其一 / 非限定名二义）
+    // ==================================================================
+
+    /** student(id, name, score) + course(cid, cname, score)：score 两表共有（二义用例），
+     *  name/cname/id/cid 各自唯一。 */
+    private static Catalog joinCatalog() throws MiniDbException {
+        Catalog catalog = new MemoryCatalog();
+        catalog.createTable(new TableDef("student", List.of(
+                new ColumnDef("id", DataType.INT, 0),
+                new ColumnDef("name", DataType.VARCHAR, 50),
+                new ColumnDef("score", DataType.FLOAT, 0))));
+        catalog.createTable(new TableDef("course", List.of(
+                new ColumnDef("cid", DataType.INT, 0),
+                new ColumnDef("cname", DataType.VARCHAR, 50),
+                new ColumnDef("score", DataType.FLOAT, 0))));
+        return catalog;
+    }
+
+    @Test
+    void joinQualifiedColumnsPasses() throws Exception {
+        // SELECT name, cname FROM student JOIN course ON student.id = course.cid
+        analyzer(joinCatalog()).analyze(new SelectStmt(
+                List.of(new ColumnRef(null, "name", p(1, 8)),
+                        new ColumnRef(null, "cname", p(1, 14))),
+                null, "student", null, false, null, null, "course",
+                new BinaryExpr(new ColumnRef("student", "id", p(1, 47)), BinaryOp.EQ,
+                        new ColumnRef("course", "cid", p(1, 61)), p(1, 47)),
+                p(1, 27)));
+    }
+
+    @Test
+    void joinUnqualifiedUniqueColumnsPasses() throws Exception {
+        // SELECT name FROM student JOIN course ON id = cid —— id/cid 两表唯一，非限定可解析
+        analyzer(joinCatalog()).analyze(new SelectStmt(
+                List.of(new ColumnRef(null, "name", p(1, 8))),
+                null, "student", null, false, null, null, "course",
+                new BinaryExpr(new ColumnRef(null, "id", p(1, 46)), BinaryOp.EQ,
+                        new ColumnRef(null, "cid", p(1, 52)), p(1, 46)),
+                p(1, 22)));
+    }
+
+    @Test
+    void joinRightTableMissingRejected() {
+        // SELECT name FROM student JOIN coruse ON id = cid —— pos 是语句 pos（表名 token 约定）
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(joinCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "name", p(1, 8))),
+                        null, "student", null, false, null, null, "coruse",
+                        new BinaryExpr(new ColumnRef(null, "id", p(1, 45)), BinaryOp.EQ,
+                                new ColumnRef(null, "cid", p(1, 51)), p(1, 45)),
+                        p(1, 22))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 22), e.pos());
+        assertTrue(e.getMessage().contains("coruse"));
+    }
+
+    @Test
+    void joinAmbiguousUnqualifiedColumnRejectedAtRefPosition() {
+        // SELECT score FROM student JOIN course ON id = cid —— score 两表均有 → 二义性列
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(joinCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "score", p(1, 8))),
+                        null, "student", null, false, null, null, "course",
+                        new BinaryExpr(new ColumnRef(null, "id", p(1, 48)), BinaryOp.EQ,
+                                new ColumnRef(null, "cid", p(1, 54)), p(1, 48)),
+                        p(1, 24))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 8), e.pos());
+        assertTrue(e.getMessage().contains("二义性列"));
+    }
+
+    @Test
+    void joinAmbiguousColumnInOnRejectedAtRefPosition() {
+        // SELECT name FROM student JOIN course ON score = 1.0 —— ON 里的 score 二义
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(joinCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "name", p(1, 8))),
+                        null, "student", null, false, null, null, "course",
+                        new BinaryExpr(new ColumnRef(null, "score", p(1, 47)), BinaryOp.EQ,
+                                new Literal(1.0, DataType.FLOAT, p(1, 56)), p(1, 47)),
+                        p(1, 23))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 47), e.pos());
+        assertTrue(e.getMessage().contains("二义性列"));
+    }
+
+    @Test
+    void joinUnknownQualifierRejectedAtRefPosition() {
+        // SELECT name FROM student JOIN course ON x.id = course.cid —— x 不匹配任何表
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(joinCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "name", p(1, 8))),
+                        null, "student", null, false, null, null, "course",
+                        new BinaryExpr(new ColumnRef("x", "id", p(1, 47)), BinaryOp.EQ,
+                                new ColumnRef("course", "cid", p(1, 54)), p(1, 47)),
+                        p(1, 23))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 47), e.pos());
+        assertTrue(e.getMessage().contains("x"));
+    }
+
+    @Test
+    void joinOnNonBooleanRejected() {
+        // SELECT name FROM student JOIN course ON student.id + course.cid —— ON 是 INT
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(joinCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "name", p(1, 8))),
+                        null, "student", null, false, null, null, "course",
+                        new BinaryExpr(new ColumnRef("student", "id", p(1, 47)), BinaryOp.ADD,
+                                new ColumnRef("course", "cid", p(1, 61)), p(1, 47)),
+                        p(1, 23))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertTrue(e.getMessage().contains("ON"));
+    }
+
+    @Test
+    void joinAggregateInOnRejected() {
+        // SELECT name FROM student JOIN course ON COUNT(*) = 1 —— 聚合不允许出现在 ON 中
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(joinCatalog()).analyze(new SelectStmt(
+                        List.of(new ColumnRef(null, "name", p(1, 8))),
+                        null, "student", null, false, null, null, "course",
+                        new BinaryExpr(new FuncCall("COUNT", null, p(1, 47)), BinaryOp.EQ,
+                                new Literal(1, DataType.INT, p(1, 59)), p(1, 47)),
+                        p(1, 23))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 47), e.pos());
+        assertTrue(e.getMessage().contains("ON"));
+    }
+
+    // ==================================================================
+    // D5 五特性：NULL（拍板 4/5/8：NULL 可赋任意列 / IS [NOT] NULL / WHERE 含 NULL 放行）
+    // ==================================================================
+
+    @Test
+    void insertNullAssignableToAnyColumnPasses() throws Exception {
+        // INSERT INTO student (id, name, score) VALUES (NULL, NULL, NULL) —— 拍板 4
+        analyzer(studentCatalog()).analyze(new InsertStmt("student",
+                List.of(new ColumnRef(null, "id", p(1, 22)),
+                        new ColumnRef(null, "name", p(1, 26)),
+                        new ColumnRef(null, "score", p(1, 32))),
+                List.of(List.of(new Literal(null, DataType.NULL, p(1, 48)),
+                        new Literal(null, DataType.NULL, p(1, 54)),
+                        new Literal(null, DataType.NULL, p(1, 61)))),
+                p(1, 13)));
+    }
+
+    @Test
+    void whereIsNullPredicatePasses() throws Exception {
+        // SELECT * FROM student WHERE name IS NULL —— 拍板 8：IS NULL 后缀谓词
+        analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
+                new UnaryExpr(UnaryOp.IS_NULL,
+                        new ColumnRef(null, "name", p(1, 33)), p(1, 38)),
+                p(1, 15)));
+    }
+
+    @Test
+    void whereIsNotNullAndComparisonPasses() throws Exception {
+        // SELECT * FROM student WHERE name IS NOT NULL AND score > 90.0
+        analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
+                new BinaryExpr(
+                        new UnaryExpr(UnaryOp.IS_NOT_NULL,
+                                new ColumnRef(null, "name", p(1, 33)), p(1, 38)),
+                        BinaryOp.AND,
+                        new BinaryExpr(new ColumnRef(null, "score", p(1, 56)), BinaryOp.GT,
+                                new Literal(90.0, DataType.FLOAT, p(1, 65)), p(1, 56)),
+                        p(1, 33)),
+                p(1, 15)));
+    }
+
+    @Test
+    void whereComparisonWithNullLiteralPasses() throws Exception {
+        // SELECT * FROM student WHERE score = NULL —— 拍板 5：静态类型 BOOLEAN（运行时 NULL 被过滤）
+        analyzer(studentCatalog()).analyze(new SelectStmt(null, "student",
+                new BinaryExpr(new ColumnRef(null, "score", p(1, 33)), BinaryOp.EQ,
+                        new Literal(null, DataType.NULL, p(1, 41)), p(1, 33)),
+                p(1, 15)));
     }
 }

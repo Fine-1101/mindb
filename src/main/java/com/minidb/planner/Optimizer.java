@@ -84,10 +84,14 @@ public class Optimizer {
             case SeqScan scan -> scan;
             case CreateTablePlan create -> create;
             case InsertPlan insert -> insert;
-            // D5 新节点 M0 透传（编译安全占位）；并行阶段 B 换真实现（子树递归重写 + 规则4 覆盖）
-            case UpdatePlan update -> update;
-            case SortPlan sort -> sort;
-            case JoinPlan join -> join;
+            // D5 三新节点（拍板 1）：UPDATE 条件折叠（SET 值非条件不折叠）；
+            // Sort 递归子树（键为列名非表达式）；JOIN 双侧递归 + ON 条件折叠（ON 折叠为 TRUE 不消除——
+            // INNER JOIN 去掉 ON = 交叉积，不等价）
+            case UpdatePlan update -> new UpdatePlan(update.tableName(), update.sets(),
+                    update.condition() == null ? null : fold(update.condition()));
+            case SortPlan sort -> new SortPlan(rewrite(sort.child()), sort.keys());
+            case JoinPlan join -> new JoinPlan(rewrite(join.left()), rewrite(join.right()),
+                    fold(join.condition()));
         };
     }
 
@@ -96,14 +100,32 @@ public class Optimizer {
     // ==================================================================
 
     private PlanNode annotateColumns(PlanNode node) {
-        boolean prunable = (node instanceof Project p && p.columns() != null)
-                || node instanceof AggregatePlan;
-        if (!prunable) {
-            return node; // SELECT * 透传 / DML / DDL 不标注
+        // Sort 在计划最外层：标注对象为其子树（Sort 键 ⊆ 输出列，随子树收集），标注后重新包上
+        boolean sortTop = node instanceof SortPlan;
+        PlanNode target = sortTop ? ((SortPlan) node).child() : node;
+        boolean prunable = (target instanceof Project p && p.columns() != null)
+                || target instanceof AggregatePlan;
+        if (!prunable || hasJoin(target)) {
+            // SELECT * 透传 / DML / DDL 不标注；JOIN 树的列归属需限定名→表解析（本优化器无
+            // Catalog 上下文），标注降级不标注——行式存储整行解码，无执行差异（拍板：标注仅为证据）
+            return node;
         }
         Set<String> cols = new LinkedHashSet<>();
-        collectPlanColumns(node, cols);
-        return withScanCols(node, List.copyOf(cols));
+        collectPlanColumns(target, cols);
+        PlanNode annotated = withScanCols(target, List.copyOf(cols));
+        return sortTop ? new SortPlan(annotated, ((SortPlan) node).keys()) : annotated;
+    }
+
+    private boolean hasJoin(PlanNode node) {
+        if (node instanceof JoinPlan) {
+            return true;
+        }
+        for (PlanNode child : node.children()) {
+            if (hasJoin(child)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void collectPlanColumns(PlanNode node, Set<String> cols) {
@@ -116,10 +138,15 @@ public class Optimizer {
             for (FuncCall f : a.aggregates()) {
                 collectExprColumns(f.arg(), cols);
             }
+            if (a.groupBy() != null) {
+                cols.addAll(a.groupBy()); // D5：分组组键也是本树实际引用的列
+            }
             collectPlanColumns(a.input(), cols);
         } else if (node instanceof Filter f) {
             collectExprColumns(f.condition(), cols);
             collectPlanColumns(f.child(), cols);
+        } else if (node instanceof SortPlan sp) {
+            collectPlanColumns(sp.child(), cols); // 键 ⊆ 子树输出列，随子树收集（手工构造树互通）
         }
         // SeqScan：终点
     }
@@ -196,8 +223,12 @@ public class Optimizer {
                     }
                     yield null;
                 }
-                // IS [NOT] NULL 谓词 M0 无折叠；并行阶段视需要处理字面量操作数
-                case IS_NULL, IS_NOT_NULL -> null;
+                // IS [NOT] NULL 谓词折叠（D5 拍板 5）：字面量操作数可定——
+                // 非NULL字面量 IS NULL → FALSE、NULL IS NULL → TRUE；非NULL字面量 IS NOT NULL → TRUE、NULL IS NOT NULL → FALSE
+                case IS_NULL -> operand instanceof Literal l
+                        ? new Literal(l.type() == DataType.NULL, DataType.BOOLEAN, un.pos()) : null;
+                case IS_NOT_NULL -> operand instanceof Literal l
+                        ? new Literal(l.type() != DataType.NULL, DataType.BOOLEAN, un.pos()) : null;
             };
             if (folded != null) {
                 return folded;

@@ -1,22 +1,35 @@
 package com.minidb.planner;
 
 import com.minidb.ast.BinaryExpr;
+import com.minidb.ast.BinaryOp;
+import com.minidb.ast.ColumnRef;
 import com.minidb.ast.DeleteStmt;
+import com.minidb.ast.FuncCall;
 import com.minidb.ast.Literal;
+import com.minidb.ast.OrderKey;
 import com.minidb.ast.SelectStmt;
+import com.minidb.ast.SetClause;
 import com.minidb.ast.Statement;
 import com.minidb.ast.UnaryExpr;
+import com.minidb.ast.UnaryOp;
+import com.minidb.ast.UpdateStmt;
 import com.minidb.catalog.Catalog;
 import com.minidb.catalog.MemoryCatalog;
 import com.minidb.common.DataType;
 import com.minidb.common.MiniDbException;
+import com.minidb.common.Position;
 import com.minidb.lexer.Lexer;
 import com.minidb.parser.Parser;
+import com.minidb.plan.AggregatePlan;
 import com.minidb.plan.DeletePlan;
 import com.minidb.plan.Filter;
+import com.minidb.plan.JoinPlan;
 import com.minidb.plan.PlanNode;
 import com.minidb.plan.Project;
 import com.minidb.plan.SeqScan;
+import com.minidb.plan.SortKey;
+import com.minidb.plan.SortPlan;
+import com.minidb.plan.UpdatePlan;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -194,5 +207,149 @@ class OptimizerTest {
         Statement stmt = parse("SELECT * FROM t WHERE a = 1;");
         PlanNode optimized = optimizer.optimize(planner.plan(stmt));
         assertEquals(new Filter(new SeqScan("t"), ((SelectStmt) stmt).where()), optimized);
+    }
+
+    // ==================================================================
+    // D5 三新节点：rewrite 透传换真实现 + 规则4 覆盖（SortPlan 键 / JoinPlan / groupBy 组键）
+    // 直构 AST——Parser 语法由 A 线合入
+    // ==================================================================
+
+    private static Position p(int line, int col) {
+        return new Position(line, col);
+    }
+
+    @Test
+    void updateConditionFolded() throws MiniDbException {
+        // UPDATE t SET a = 2 WHERE 1 = 1 AND b = 3 —— 条件折叠到 b = 3，SET 值非条件不动
+        UpdateStmt stmt = new UpdateStmt("t",
+                List.of(new SetClause(new ColumnRef(null, "a", p(1, 16)),
+                        new Literal(2, DataType.INT, p(1, 21)))),
+                new BinaryExpr(
+                        new BinaryExpr(new Literal(1, DataType.INT, p(1, 32)), BinaryOp.EQ,
+                                new Literal(1, DataType.INT, p(1, 38)), p(1, 32)),
+                        BinaryOp.AND,
+                        new BinaryExpr(new ColumnRef(null, "b", p(1, 46)), BinaryOp.EQ,
+                                new Literal(3, DataType.INT, p(1, 52)), p(1, 46)),
+                        p(1, 32)),
+                p(1, 8));
+        BinaryExpr and = (BinaryExpr) stmt.where();
+        UpdatePlan optimized = (UpdatePlan) optimizer.optimize(planner.plan(stmt));
+        assertEquals(and.right(), optimized.condition());
+    }
+
+    @Test
+    void sortPlanRewriteAndAnnotationPassThrough() throws MiniDbException {
+        // SELECT a FROM t WHERE 1 = 1 AND b = 3 ORDER BY a DESC ——
+        // rewrite：条件折叠为 b = 3；规则4：Sort 顶层 → 子树标注 SeqScan{cols=[a,b]} 后重包
+        SelectStmt stmt = new SelectStmt(List.of(new ColumnRef(null, "a", p(1, 8))), null,
+                "t",
+                new BinaryExpr(
+                        new BinaryExpr(new Literal(1, DataType.INT, p(1, 27)), BinaryOp.EQ,
+                                new Literal(1, DataType.INT, p(1, 33)), p(1, 27)),
+                        BinaryOp.AND,
+                        new BinaryExpr(new ColumnRef(null, "b", p(1, 41)), BinaryOp.EQ,
+                                new Literal(3, DataType.INT, p(1, 47)), p(1, 41)),
+                        p(1, 27)),
+                false, null,
+                List.of(new OrderKey(new ColumnRef(null, "a", p(1, 56)), false)),
+                null, null, p(1, 18));
+        BinaryExpr and = (BinaryExpr) stmt.where();
+        assertEquals(new SortPlan(
+                new Project(new Filter(new SeqScan("t", List.of("a", "b")), and.right()),
+                        List.of("a")),
+                List.of(new SortKey("a", false))), optimizer.optimize(planner.plan(stmt)));
+    }
+
+    @Test
+    void joinPlanOnFoldedAndScansUnannotated() throws MiniDbException {
+        // SELECT a FROM t JOIN u ON 1 = 1 AND t.id = u.id —— ON 折叠为 t.id = u.id；
+        // JOIN 树列归属需限定名→表解析（本优化器无 Catalog 上下文），规则4 降级不标注
+        SelectStmt stmt = new SelectStmt(List.of(new ColumnRef(null, "a", p(1, 8))), null,
+                "t", null, false, null, null, "u",
+                new BinaryExpr(
+                        new BinaryExpr(new Literal(1, DataType.INT, p(1, 33)), BinaryOp.EQ,
+                                new Literal(1, DataType.INT, p(1, 39)), p(1, 33)),
+                        BinaryOp.AND,
+                        new BinaryExpr(new ColumnRef("t", "id", p(1, 47)), BinaryOp.EQ,
+                                new ColumnRef("u", "id", p(1, 56)), p(1, 47)),
+                        p(1, 33)),
+                p(1, 18));
+        BinaryExpr and = (BinaryExpr) stmt.joinOn();
+        assertEquals(new Project(
+                new JoinPlan(new SeqScan("t"), new SeqScan("u"), and.right()),
+                List.of("a")), optimizer.optimize(planner.plan(stmt)));
+    }
+
+    @Test
+    void rule4CollectsGroupByKeysAndAggregateArgs() throws MiniDbException {
+        // 规则4 覆盖 groupBy 组键：引用列集 = 聚合参数 b + 组键 a → SeqScan{cols=[b,a]}
+        AggregatePlan plan = new AggregatePlan(new SeqScan("t"),
+                List.of(new FuncCall("SUM", new ColumnRef(null, "b", p(1, 12)), p(1, 8))),
+                List.of("a"));
+        assertEquals(new AggregatePlan(new SeqScan("t", List.of("b", "a")),
+                plan.aggregates(), List.of("a")), optimizer.optimize(plan));
+    }
+
+    @Test
+    void isNullOnLiteralFoldsToFalse() throws MiniDbException {
+        // WHERE 1 IS NULL AND a = 2 —— 1 IS NULL → FALSE，FALSE AND x → FALSE（pos = AND 表达式位置）
+        BinaryExpr and = new BinaryExpr(
+                new UnaryExpr(UnaryOp.IS_NULL, new Literal(1, DataType.INT, p(1, 33)), p(1, 35)),
+                BinaryOp.AND,
+                new BinaryExpr(new ColumnRef(null, "a", p(1, 46)), BinaryOp.EQ,
+                        new Literal(2, DataType.INT, p(1, 52)), p(1, 46)),
+                p(1, 41));
+        SelectStmt stmt = new SelectStmt(List.of(new ColumnRef(null, "a", p(1, 8))),
+                "t", and, p(1, 18));
+        Filter filter = filterOf(optimizer.optimize(planner.plan(stmt)));
+        assertEquals(new Literal(false, DataType.BOOLEAN, and.pos()), filter.condition());
+    }
+
+    @Test
+    void isNotNullOnLiteralFoldsTrueAndSimplifies() throws MiniDbException {
+        // WHERE 1 IS NOT NULL AND a = 2 —— 1 IS NOT NULL → TRUE，TRUE AND x → x
+        BinaryExpr and = new BinaryExpr(
+                new UnaryExpr(UnaryOp.IS_NOT_NULL,
+                        new Literal(1, DataType.INT, p(1, 33)), p(1, 35)),
+                BinaryOp.AND,
+                new BinaryExpr(new ColumnRef(null, "a", p(1, 48)), BinaryOp.EQ,
+                        new Literal(2, DataType.INT, p(1, 54)), p(1, 48)),
+                p(1, 43));
+        SelectStmt stmt = new SelectStmt(List.of(new ColumnRef(null, "a", p(1, 8))),
+                "t", and, p(1, 18));
+        Filter filter = filterOf(optimizer.optimize(planner.plan(stmt)));
+        assertEquals(and.right(), filter.condition());
+    }
+
+    @Test
+    void nullLiteralIsNullFoldsTrueAndSimplifies() throws MiniDbException {
+        // WHERE NULL IS NULL AND a = 2 —— NULL IS NULL → TRUE，TRUE AND x → x
+        BinaryExpr and = new BinaryExpr(
+                new UnaryExpr(UnaryOp.IS_NULL,
+                        new Literal(null, DataType.NULL, p(1, 33)), p(1, 38)),
+                BinaryOp.AND,
+                new BinaryExpr(new ColumnRef(null, "a", p(1, 51)), BinaryOp.EQ,
+                        new Literal(2, DataType.INT, p(1, 57)), p(1, 51)),
+                p(1, 46));
+        SelectStmt stmt = new SelectStmt(List.of(new ColumnRef(null, "a", p(1, 8))),
+                "t", and, p(1, 18));
+        Filter filter = filterOf(optimizer.optimize(planner.plan(stmt)));
+        assertEquals(and.right(), filter.condition());
+    }
+
+    @Test
+    void nullLiteralIsNotNullFoldsToFalse() throws MiniDbException {
+        // WHERE NULL IS NOT NULL AND a = 2 —— NULL IS NOT NULL → FALSE，FALSE AND x → FALSE
+        BinaryExpr and = new BinaryExpr(
+                new UnaryExpr(UnaryOp.IS_NOT_NULL,
+                        new Literal(null, DataType.NULL, p(1, 33)), p(1, 38)),
+                BinaryOp.AND,
+                new BinaryExpr(new ColumnRef(null, "a", p(1, 51)), BinaryOp.EQ,
+                        new Literal(2, DataType.INT, p(1, 57)), p(1, 51)),
+                p(1, 46));
+        SelectStmt stmt = new SelectStmt(List.of(new ColumnRef(null, "a", p(1, 8))),
+                "t", and, p(1, 18));
+        Filter filter = filterOf(optimizer.optimize(planner.plan(stmt)));
+        assertEquals(new Literal(false, DataType.BOOLEAN, and.pos()), filter.condition());
     }
 }

@@ -997,4 +997,64 @@ class SemanticAnalyzerTest {
                         new Literal(null, DataType.NULL, p(1, 41)), p(1, 33)),
                 p(1, 15)));
     }
+
+    // ==================================================================
+    // BOOLEAN 列类型：建表 / INSERT TRUE/FALSE/NULL / 类型不匹配拒绝
+    // ==================================================================
+
+    /** flag(id INT, active BOOLEAN)。 */
+    private static Catalog booleanCatalog() throws MiniDbException {
+        Catalog catalog = new MemoryCatalog();
+        catalog.createTable(new TableDef("flag", List.of(
+                new ColumnDef("id", DataType.INT, 0),
+                new ColumnDef("active", DataType.BOOLEAN, 0))));
+        return catalog;
+    }
+
+    @Test
+    void createBooleanColumnTablePasses() throws Exception {
+        // CREATE TABLE flag (id INT, active BOOLEAN)
+        analyzer(new MemoryCatalog()).analyze(new CreateTableStmt("flag", List.of(
+                new ColumnDef("id", DataType.INT, 0),
+                new ColumnDef("active", DataType.BOOLEAN, 0)), p(1, 14)));
+    }
+
+    @Test
+    void insertTrueFalseNullIntoBooleanColumnPasses() throws Exception {
+        // INSERT INTO flag VALUES (1, TRUE), (2, FALSE), (3, NULL)
+        analyzer(booleanCatalog()).analyze(new InsertStmt("flag", null, List.of(
+                List.of(new Literal(1, DataType.INT, p(1, 27)),
+                        new Literal(Boolean.TRUE, DataType.BOOLEAN, p(1, 30))),
+                List.of(new Literal(2, DataType.INT, p(1, 40)),
+                        new Literal(Boolean.FALSE, DataType.BOOLEAN, p(1, 43))),
+                List.of(new Literal(3, DataType.INT, p(1, 53)),
+                        new Literal(null, DataType.NULL, p(1, 56)))),
+                p(1, 13)));
+    }
+
+    @Test
+    void insertBooleanIntoIntColumnRejectedAtValuePosition() {
+        // INSERT INTO flag (id) VALUES (TRUE) —— INT 列给 BOOLEAN，pos 是 TRUE(1,29)
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(booleanCatalog()).analyze(new InsertStmt("flag",
+                        List.of(new ColumnRef(null, "id", p(1, 22))),
+                        List.of(List.of(new Literal(Boolean.TRUE, DataType.BOOLEAN, p(1, 29)))),
+                        p(1, 13))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 29), e.pos());
+        assertTrue(e.getMessage().contains("BOOLEAN"));
+    }
+
+    @Test
+    void insertIntIntoBooleanColumnRejectedAtValuePosition() {
+        // INSERT INTO flag (active) VALUES (1) —— BOOLEAN 列给 INT，pos 是 1(1,33)
+        MiniDbException e = assertThrows(MiniDbException.class, () ->
+                analyzer(booleanCatalog()).analyze(new InsertStmt("flag",
+                        List.of(new ColumnRef(null, "active", p(1, 22))),
+                        List.of(List.of(new Literal(1, DataType.INT, p(1, 33)))),
+                        p(1, 13))));
+        assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
+        assertEquals(p(1, 33), e.pos());
+        assertTrue(e.getMessage().contains("BOOLEAN"));
+    }
 }

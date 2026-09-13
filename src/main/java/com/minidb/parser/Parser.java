@@ -242,15 +242,18 @@ public class Parser {
         return new CreateTableStmt(table.text(), columns, table.pos());
     }
 
-    /** ident type，type 为 INT / FLOAT / VARCHAR(INT_LIT)。 */
+    /** ident type，type 为 INT / FLOAT / BOOLEAN / VARCHAR(INT_LIT)。 */
     private ColumnDef parseColumnDef() throws MiniDbException {
         Token name = expect(TokenType.IDENT);
-        Token typeToken = expectAny(TokenType.KW_INT, TokenType.KW_FLOAT, TokenType.KW_VARCHAR);
+        Token typeToken = expectAny(TokenType.KW_INT, TokenType.KW_FLOAT,
+                TokenType.KW_VARCHAR, TokenType.KW_BOOLEAN);
         switch (typeToken.type()) {
             case KW_INT:
                 return new ColumnDef(name.text(), DataType.INT, 0);
             case KW_FLOAT:
                 return new ColumnDef(name.text(), DataType.FLOAT, 0);
+            case KW_BOOLEAN:
+                return new ColumnDef(name.text(), DataType.BOOLEAN, 0);
             default: // KW_VARCHAR
                 expect(TokenType.LPAREN);
                 Token len = expect(TokenType.INT_LIT);
@@ -306,7 +309,7 @@ public class Parser {
         return row;
     }
 
-    /** INSERT 的值：INT_LIT / FLOAT_LIT / STRING / NULL。 */
+    /** INSERT 的值：INT_LIT / FLOAT_LIT / STRING / NULL / TRUE / FALSE。 */
     private Expression parseValueLiteral() throws MiniDbException {
         Token t = peek();
         switch (t.type()) {
@@ -322,9 +325,15 @@ public class Parser {
             case KW_NULL:
                 advance();
                 return new Literal(null, DataType.NULL, t.pos());
+            case KW_TRUE:
+                advance();
+                return new Literal(Boolean.TRUE, DataType.BOOLEAN, t.pos());
+            case KW_FALSE:
+                advance();
+                return new Literal(Boolean.FALSE, DataType.BOOLEAN, t.pos());
             default:
                 throw error(t, TokenType.INT_LIT, TokenType.FLOAT_LIT, TokenType.STRING,
-                        TokenType.KW_NULL);
+                        TokenType.KW_NULL, TokenType.KW_TRUE, TokenType.KW_FALSE);
         }
     }
 

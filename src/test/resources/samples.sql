@@ -60,3 +60,7 @@ SELECT id, name FROM student JOIN course ON student.id = course.cid;
 
 -- 15. SELECT（D5：IS NOT NULL + GROUP BY + ORDER BY ASC/DESC）
 SELECT name, COUNT(*) FROM student WHERE score IS NOT NULL GROUP BY name ORDER BY name ASC, score DESC;
+
+-- 16. CREATE + INSERT（BOOLEAN 列类型 + TRUE/FALSE 字面量）
+CREATE TABLE flag_t (id INT, active BOOLEAN);
+INSERT INTO flag_t VALUES (1, TRUE), (2, FALSE);

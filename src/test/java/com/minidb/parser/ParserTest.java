@@ -651,10 +651,10 @@ class ParserTest {
             sql = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
         }
         List<Statement> stmts = new Parser().parseScript(new Lexer().tokenize(sql));
-        // 15 条（D4 追加 DISTINCT；D5 追加 2 条 UPDATE、1 条 JOIN、1 条 GROUP BY+ORDER BY）
-        assertEquals(15, stmts.size());
-        assertEquals(2, stmts.stream().filter(s -> s instanceof CreateTableStmt).count());
-        assertEquals(3, stmts.stream().filter(s -> s instanceof InsertStmt).count());
+        // 17 条（D4 追加 DISTINCT；D5 追加 2 条 UPDATE、1 条 JOIN、1 条 GROUP BY+ORDER BY；BOOLEAN 特性 1 条建表+1 条插入）
+        assertEquals(17, stmts.size());
+        assertEquals(3, stmts.stream().filter(s -> s instanceof CreateTableStmt).count());
+        assertEquals(4, stmts.stream().filter(s -> s instanceof InsertStmt).count());
         assertEquals(6, stmts.stream().filter(s -> s instanceof SelectStmt).count());
         assertEquals(2, stmts.stream().filter(s -> s instanceof DeleteStmt).count());
         assertEquals(2, stmts.stream().filter(s -> s instanceof UpdateStmt).count());

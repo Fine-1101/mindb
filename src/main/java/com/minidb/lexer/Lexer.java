@@ -11,7 +11,7 @@ import java.util.Map;
 /**
  * 逐字符扫描的 SQL 词法分析器。
  *
- * <p>支持：大小写不敏感关键字（27 个 KW_*，D5 M0 冻结）、标识符、INT/FLOAT/STRING 字面量、
+ * <p>支持：大小写不敏感关键字（30 个 KW_*，D5 M0 冻结 27 + BOOLEAN 特性 3 个）、标识符、INT/FLOAT/STRING 字面量、
  * 单行(--)与多行(/* *&#47;)注释、双字符运算符(>= <= != ==)、单字符运算符与分隔符、
  * 1 起始的 line/column 位置记录，以及按统一 MiniDbException(Phase.LEXER) 报错。
  *
@@ -20,7 +20,7 @@ import java.util.Map;
  */
 public class Lexer {
 
-    /** 全部关键字（小写 -> TokenType），查找时大小写不敏感。D5 M0 冻结为 27 个。 */
+    /** 全部关键字（小写 -> TokenType），查找时大小写不敏感。D5 M0 冻结 27 + BOOLEAN 特性 3 个。 */
     private static final Map<String, TokenType> KEYWORDS = Map.ofEntries(
             Map.entry("create", TokenType.KW_CREATE),
             Map.entry("table", TokenType.KW_TABLE),
@@ -48,7 +48,10 @@ public class Lexer {
             Map.entry("null", TokenType.KW_NULL),
             Map.entry("is", TokenType.KW_IS),
             Map.entry("asc", TokenType.KW_ASC),
-            Map.entry("desc", TokenType.KW_DESC));
+            Map.entry("desc", TokenType.KW_DESC),
+            Map.entry("true", TokenType.KW_TRUE),
+            Map.entry("false", TokenType.KW_FALSE),
+            Map.entry("boolean", TokenType.KW_BOOLEAN));
 
     private String sql;
     private int length;

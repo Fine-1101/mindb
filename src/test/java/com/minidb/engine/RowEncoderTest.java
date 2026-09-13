@@ -205,6 +205,36 @@ class RowEncoderTest {
         assertEquals(12, encoded.length, "含 null 的混合行编码长度应为 1+(2+1)+8=12 字节");
     }
 
+    @Test
+    void testBooleanRoundTripAndLength() {
+        // BOOLEAN 行: 1B null位图 + 1B = 2B；true→0x01 / false→0x00
+        List<ColumnDef> cols = List.of(new ColumnDef("active", DataType.BOOLEAN, 0));
+        byte[] t = RowEncoder.encode(cols, new Object[]{Boolean.TRUE});
+        byte[] f = RowEncoder.encode(cols, new Object[]{Boolean.FALSE});
+        assertEquals(2, t.length, "BOOLEAN 行编码长度应为 1+1=2 字节");
+        assertEquals(1, t[1], "TRUE 应编码为 0x01");
+        assertEquals(0, f[1], "FALSE 应编码为 0x00");
+        assertEquals(Boolean.TRUE, RowEncoder.decode(cols, t)[0]);
+        assertEquals(Boolean.FALSE, RowEncoder.decode(cols, f)[0]);
+
+        // null BOOLEAN 不占定长区: 1B 位图 + 0B = 1B
+        byte[] n = RowEncoder.encode(cols, new Object[]{null});
+        assertEquals(1, n.length);
+        assertNull(RowEncoder.decode(cols, n)[0]);
+
+        // 混合行: INT + BOOLEAN + VARCHAR(2): 1 + 4 + 1 + (2+2) = 10B
+        List<ColumnDef> mixed = List.of(
+                new ColumnDef("id", DataType.INT, 0),
+                new ColumnDef("active", DataType.BOOLEAN, 0),
+                new ColumnDef("tag", DataType.VARCHAR, 50));
+        byte[] m = RowEncoder.encode(mixed, new Object[]{7, Boolean.TRUE, "ok"});
+        assertEquals(10, m.length);
+        Object[] back = RowEncoder.decode(mixed, m);
+        assertEquals(7, back[0]);
+        assertEquals(Boolean.TRUE, back[1]);
+        assertEquals("ok", back[2]);
+    }
+
     // ============================================================
     // 超过 8 列（null 位图 > 1 字节）
     // ============================================================

@@ -238,18 +238,18 @@ public class Engine {
         }
 
         for (List<com.minidb.ast.Expression> row : plan.rows()) {
-            Object[] values = new Object[row.size()];
+            // 按全表列构造行：指定列按名映射到对应下标，未覆盖列填 null（部分列 INSERT 补 NULL）
+            Object[] values = new Object[allColumns.size()];
             for (int i = 0; i < row.size(); i++) {
                 com.minidb.ast.Expression expr = row.get(i);
-                if (expr instanceof Literal lit) {
-                    values[i] = lit.value();
-                } else {
+                if (!(expr instanceof Literal lit)) {
                     throw new MiniDbException(MiniDbException.Phase.PLAN, null,
                             "INSERT 值必须是字面量");
                 }
+                values[allColumns.indexOf(targetColumnDefs.get(i))] = lit.value();
             }
 
-            byte[] encoded = RowEncoder.encode(targetColumnDefs, values);
+            byte[] encoded = RowEncoder.encode(allColumns, values);
 
             int lastPageId = pageIds.get(pageIds.size() - 1);
             Page currentPage = pool.getPage(tableNameKey, lastPageId);

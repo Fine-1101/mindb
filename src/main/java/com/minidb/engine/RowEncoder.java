@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * 行编解码器。
- * 格式: [null位图 (n+7)/8 B][定长区: INT 4B / FLOAT 8B][变长区: VARCHAR 2B长度+UTF-8内容]
+ * 格式: [null位图 (n+7)/8 B][定长区: INT 4B / FLOAT 8B / BOOLEAN 1B][变长区: VARCHAR 2B长度+UTF-8内容]
  * 按列定义顺序编码。null 位图每个 bit 对应一列，1 表示 null，0 表示非null。
  */
 public final class RowEncoder {
@@ -43,7 +43,7 @@ public final class RowEncoder {
                 case INT -> 4;
                 case FLOAT -> 8;
                 case VARCHAR -> 2 + ((String) values[i]).getBytes(StandardCharsets.UTF_8).length;
-                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不支持作为列类型");
+                case BOOLEAN -> 1;
                 case NULL -> throw new IllegalArgumentException("NULL 不支持作为列类型");
             };
         }
@@ -71,7 +71,7 @@ public final class RowEncoder {
                     buf.putShort((short) bytes.length);
                     buf.put(bytes);
                 }
-                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不支持作为列类型");
+                case BOOLEAN -> buf.put((Boolean) values[i] ? (byte) 1 : (byte) 0);
                 case NULL -> throw new IllegalArgumentException("NULL 不支持作为列类型");
             }
         }
@@ -111,7 +111,7 @@ public final class RowEncoder {
                     buf.get(bytes);
                     yield new String(bytes, StandardCharsets.UTF_8);
                 }
-                case BOOLEAN -> throw new IllegalArgumentException("BOOLEAN 不支持作为列类型");
+                case BOOLEAN -> buf.get() != 0;
                 case NULL -> throw new IllegalArgumentException("NULL 不支持作为列类型");
             };
         }

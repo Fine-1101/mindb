@@ -126,8 +126,8 @@ public class LexerTest {
                 seen.add(type);
             }
         }
-        // 确保 27 个关键字确实被遍历到（防止以后枚举新增漏测；D4 加入 DISTINCT，D5 M0 加入 11 个）
-        assertEquals(27, seen.size());
+        // 确保 30 个关键字确实被遍历到（防止以后枚举新增漏测；D4 加入 DISTINCT，D5 M0 加入 11 个，BOOLEAN 特性加 3 个）
+        assertEquals(30, seen.size());
     }
 
     @Test
@@ -531,19 +531,19 @@ public class LexerTest {
         assertNotNull(sql, "samples.sql 资源不存在");
         List<Token> tokens = lex(sql);
 
-        // 整份文件可以切分：末尾为 EOF；恰好 15 条语句 => 15 个分号（D5 追加 UPDATE/JOIN/GROUP BY/ORDER BY）
+        // 整份文件可以切分：末尾为 EOF；恰好 17 条语句 => 17 个分号（D5 追加 5 条 + BOOLEAN 特性 2 条）
         assertEquals(TokenType.EOF, tok(tokens, tokens.size() - 1).type());
         long semiCount = tokens.stream().filter(t -> t.type() == TokenType.SEMI).count();
-        assertEquals(15, semiCount);
+        assertEquals(17, semiCount);
 
-        // 27 个关键字在样例中全部出现且被正确识别（D5 加入 UPDATE/SET/ORDER/BY/GROUP/JOIN/ON/NULL/IS/ASC/DESC）
+        // 30 个关键字在样例中全部出现且被正确识别（D5 加入 11 个，BOOLEAN 特性加入 TRUE/FALSE/BOOLEAN）
         Set<TokenType> keywordTypes = EnumSet.noneOf(TokenType.class);
         for (Token t : tokens) {
             if (t.type().name().startsWith("KW_")) {
                 keywordTypes.add(t.type());
             }
         }
-        assertEquals(27, keywordTypes.size());
+        assertEquals(30, keywordTypes.size());
 
         // 转义字符串、中文、空字符串的字面量值正确
         boolean sawEscaped = false;

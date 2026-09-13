@@ -162,7 +162,7 @@ public class SemanticAnalyzer {
 
     /** INSERT 值类型匹配：INT←INT_LIT；FLOAT←INT_LIT/FLOAT_LIT（INT 提升）；
      *  VARCHAR←STRING 且 UTF-8 字节数 ≤ maxLength（超限会撑爆 RowEncoder 的 2B 长度）；
-     *  任何列 ← NULL 字面量（D5 拍板 4，NULL 可赋任意列）。 */
+     *  BOOLEAN←TRUE/FALSE；任何列 ← NULL 字面量（D5 拍板 4，NULL 可赋任意列）。 */
     private void checkValue(Expression value, ColumnDef column) throws MiniDbException {
         if (!(value instanceof Literal lit)) {
             throw new MiniDbException(MiniDbException.Phase.SEMANTIC, value.pos(),
@@ -179,7 +179,7 @@ public class SemanticAnalyzer {
         checkAssignable(lit.type(), column, lit.pos());
     }
 
-    /** 值类型可赋给列：INT←INT；FLOAT←INT/FLOAT；VARCHAR←VARCHAR；任何列 ← NULL（D5 拍板 4）。
+    /** 值类型可赋给列：INT←INT；FLOAT←INT/FLOAT；VARCHAR←VARCHAR；BOOLEAN←BOOLEAN；任何列 ← NULL（D5 拍板 4）。
      *  INSERT 字面量与 UPDATE 表达式共用。 */
     private void checkAssignable(DataType valueType, ColumnDef column, Position pos)
             throws MiniDbException {
@@ -188,7 +188,8 @@ public class SemanticAnalyzer {
             case FLOAT -> valueType == DataType.INT || valueType == DataType.FLOAT
                     || valueType == DataType.NULL;
             case VARCHAR -> valueType == DataType.VARCHAR || valueType == DataType.NULL;
-            case BOOLEAN, NULL -> false; // 仅语义类型，不能作列类型
+            case BOOLEAN -> valueType == DataType.BOOLEAN || valueType == DataType.NULL;
+            case NULL -> false; // 仅语义类型，不能作列类型
         };
         if (!ok) {
             throw new MiniDbException(MiniDbException.Phase.SEMANTIC, pos,

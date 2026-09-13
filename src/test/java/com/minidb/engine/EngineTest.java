@@ -137,31 +137,32 @@ class EngineTest {
                         new com.minidb.ast.Literal(99, DataType.INT, null))
         )));
 
-        // 按 targetColumns 即 (b, a) 序解码 → 落盘列序必须与 targetColumns 严格一致
-        List<ColumnDef> targetCols = List.of(
-                new ColumnDef("b", DataType.VARCHAR, 50),
-                new ColumnDef("a", DataType.INT, 0));
+        // 落盘行按表定义序 (a, b)：指定列按名映射，值落正确列
+        List<ColumnDef> tableCols = List.of(
+                new ColumnDef("a", DataType.INT, 0),
+                new ColumnDef("b", DataType.VARCHAR, 50));
 
         List<Integer> pageIds = engine.getTablePageIds("t1");
         Page page = pool.getPage("t1", pageIds.get(0));
 
-        Object[] row0 = RowEncoder.decode(targetCols, page.readRow(0));
-        assertEquals("hello", row0[0], "第1列落盘应为 b='hello'");
-        assertEquals(42, row0[1],      "第2列落盘应为 a=42");
+        Object[] row0 = RowEncoder.decode(tableCols, page.readRow(0));
+        assertEquals(42, row0[0], "第1列落盘应为 a=42");
+        assertEquals("hello", row0[1], "第2列落盘应为 b='hello'");
 
-        Object[] row1 = RowEncoder.decode(targetCols, page.readRow(1));
-        assertEquals("world", row1[0], "第1列落盘应为 b='world'");
-        assertEquals(99, row1[1],      "第2列落盘应为 a=99");
+        Object[] row1 = RowEncoder.decode(tableCols, page.readRow(1));
+        assertEquals(99, row1[0], "第1列落盘应为 a=99");
+        assertEquals("world", row1[1], "第2列落盘应为 b='world'");
 
-        // 反面验证：检查原始字节证明落盘序是 (b=VARCHAR, a=INT) 而非表定义序 (a=INT, b=VARCHAR)
-        // 编码格式: [1B位图][VARCHAR: 2B长度+内容][INT: 4B]
-        // 如果按表定义序(INT在前)编码，第2字节应该是 INT 的高位(0x00)；
-        // 但实际是 VARCHAR 长度前缀的高字节
+        // 反面验证：检查原始字节证明落盘序是表定义序 (a=INT, b=VARCHAR)
+        // 而非 targetColumns 书写序 (b, a)——否则 SELECT * 按表定义序解码会错乱
+        // 编码格式: [1B位图][INT: 4B][VARCHAR: 2B长度+内容]
         byte[] raw = page.readRow(0);
-        // bitmap=0(无非null), 接下来是 VARCHAR(5)"hello": 0x00,0x05,'h','e','l','l','o', 然后 INT(42): 0,0,0,42
-        assertEquals(0x00, raw[1], "VARCHAR 长度高字节应为 0x00");
-        assertEquals(0x05, raw[2], "VARCHAR 长度低字节应为 0x05(='hello'长度5)");
-        assertEquals('h', (char) raw[3], "VARCHAR 内容首字节应为 'h'");
+        // bitmap=0(无非null), 接下来是 INT(42): 0,0,0,42, 然后 VARCHAR(5)"hello": 0x00,0x05,'h','e','l','l','o'
+        assertEquals(0, raw[1], "INT 高字节应为 0x00");
+        assertEquals(42, raw[4], "INT 低位应为 42");
+        assertEquals(0x00, raw[5], "VARCHAR 长度高字节应为 0x00");
+        assertEquals(0x05, raw[6], "VARCHAR 长度低字节应为 0x05(='hello'长度5)");
+        assertEquals('h', (char) raw[7], "VARCHAR 内容首字节应为 'h'");
     }
 
     // ============================================================

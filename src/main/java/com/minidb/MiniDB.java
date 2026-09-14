@@ -256,7 +256,7 @@ public class MiniDB {
     // --script 批量执行
     // ------------------------------------------------------------------
 
-    /** 读取脚本文件并逐条执行。 */
+    /** 读取脚本文件并逐条执行（词法/语法/语义错误均只跳过当前语句，不中断脚本）。 */
     public void runScript(String filePath) {
         try {
             StringBuilder sb = new StringBuilder();
@@ -266,21 +266,61 @@ public class MiniDB {
                     sb.append(line).append('\n');
                 }
             }
-            String script = sb.toString();
-            List<Token> tokens = lexer.tokenize(script);
-            List<Statement> stmts = parser.parseScript(tokens);
-            for (Statement stmt : stmts) {
-                try {
-                    executeStatement(stmt);
-                } catch (MiniDbException e) {
-                    printError(e);
-                }
+            // 按顶层 ';' 切分，每段独立执行：一段的词法/语法错误不会拖垮整个脚本
+            for (String stmt : splitStatements(sb.toString())) {
+                executeSql(stmt);
             }
-        } catch (MiniDbException e) {
-            printError(e);
         } catch (IOException e) {
             System.err.println("读取脚本文件失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 按顶层 ';' 切分脚本；字符串（含 '' 转义）、-- 行注释、块注释内的 ';' 不切。
+     * 未闭合字符串行界恢复：字符串到行尾仍未闭合时，在该行最后一个 ';' 处截断，
+     * 使该错误语句只波及自身一行（字符串不支持跨行，脚本切分以此为界）。
+     */
+    private static List<String> splitStatements(String script) {
+        List<String> parts = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        boolean inStr = false, inLine = false, inBlock = false;
+        for (int i = 0; i < script.length(); i++) {
+            char c = script.charAt(i);
+            char next = i + 1 < script.length() ? script.charAt(i + 1) : '\0';
+            if (inLine) {
+                cur.append(c);
+                if (c == '\n') inLine = false;
+            } else if (inBlock) {
+                cur.append(c);
+                if (c == '*' && next == '/') { cur.append(next); i++; inBlock = false; }
+            } else if (inStr) {
+                cur.append(c);
+                if (c == '\'') {
+                    if (next == '\'') { cur.append(next); i++; } else inStr = false;
+                } else if (c == '\n') {
+                    // 行尾仍未闭合：截到最后一个 ';' 隔离本语句；无 ';' 则并入当前段
+                    int cut = cur.lastIndexOf(";");
+                    if (cut >= 0) {
+                        parts.add(cur.substring(0, cut + 1));
+                        cur.delete(0, cut + 1);
+                    }
+                    inStr = false;
+                }
+            } else if (c == '-' && next == '-') {
+                cur.append(c).append(next); i++; inLine = true;
+            } else if (c == '/' && next == '*') {
+                cur.append(c).append(next); i++; inBlock = true;
+            } else if (c == '\'') {
+                cur.append(c); inStr = true;
+            } else if (c == ';') {
+                parts.add(cur.toString());
+                cur.setLength(0);
+            } else {
+                cur.append(c);
+            }
+        }
+        if (!cur.toString().isBlank()) parts.add(cur.toString());
+        return parts;
     }
 
     // ------------------------------------------------------------------

@@ -309,9 +309,24 @@ public class Parser {
         return row;
     }
 
-    /** INSERT 的值：INT_LIT / FLOAT_LIT / STRING / NULL / TRUE / FALSE。 */
+    /** INSERT 的值：INT_LIT / FLOAT_LIT（可带负号）/ STRING / NULL / TRUE / FALSE。 */
     private Expression parseValueLiteral() throws MiniDbException {
         Token t = peek();
+        // 负数字面量：-1 / -1.5，符号直接折叠进 Literal（保持"INSERT 值必须是字面量"约束）
+        if (t.type() == TokenType.OP_SUB) {
+            Token sub = advance();
+            Token num = peek();
+            if (num.type() == TokenType.INT_LIT) {
+                advance();
+                return new Literal(-(Integer) num.value(), DataType.INT, sub.pos());
+            }
+            if (num.type() == TokenType.FLOAT_LIT) {
+                advance();
+                return new Literal(-(Double) num.value(), DataType.FLOAT, sub.pos());
+            }
+            throw error(num, TokenType.INT_LIT, TokenType.FLOAT_LIT, TokenType.STRING,
+                    TokenType.KW_NULL, TokenType.KW_TRUE, TokenType.KW_FALSE);
+        }
         switch (t.type()) {
             case INT_LIT:
                 advance();
@@ -656,7 +671,7 @@ public class Parser {
         return parsePrimary();
     }
 
-    /** 原子：INT/FLOAT/STRING/NULL 字面量、列引用、括号表达式、聚合函数。 */
+    /** 原子：INT/FLOAT/STRING/NULL/TRUE/FALSE 字面量、列引用、括号表达式、聚合函数。 */
     private Expression parsePrimary() throws MiniDbException {
         Token t = peek();
         switch (t.type()) {
@@ -673,6 +688,12 @@ public class Parser {
                 // NULL 字面量：value == null，语义类型 DataType.NULL（不是字符串 "NULL"）
                 advance();
                 return new Literal(null, DataType.NULL, t.pos());
+            case KW_TRUE:
+                advance();
+                return new Literal(Boolean.TRUE, DataType.BOOLEAN, t.pos());
+            case KW_FALSE:
+                advance();
+                return new Literal(Boolean.FALSE, DataType.BOOLEAN, t.pos());
             case IDENT:
                 advance();
                 if (check(TokenType.LPAREN)) {

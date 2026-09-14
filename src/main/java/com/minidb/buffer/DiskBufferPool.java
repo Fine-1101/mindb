@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class DiskBufferPool implements BufferPool {
-    private static final String DATA_DIR = "data";
+    private final String dataDir;
     private final int capacity;
     private final Map<String, TableFile> tableFiles;
     private final Map<String, Page> cache;
@@ -26,11 +26,17 @@ public class DiskBufferPool implements BufferPool {
     private final BufferLogger logger;
 
     public DiskBufferPool(int capacity) {
-        this(capacity, null);
+        this(capacity, "data", null);
     }
 
-    public DiskBufferPool(int capacity,BufferLogger logger) {
+    public DiskBufferPool(int capacity, BufferLogger logger) {
+        this(capacity, "data", logger);
+    }
+
+    /** @param dataDir 表数据文件目录（测试传独立目录，生产用 "data"） */
+    public DiskBufferPool(int capacity, String dataDir, BufferLogger logger) {
         this.capacity = capacity;
+        this.dataDir = dataDir;
         this.tableFiles = new ConcurrentHashMap<>();
         this.cache = new ConcurrentHashMap<>();
         this.accessOrder = Collections.synchronizedList(new ArrayList<>());
@@ -42,7 +48,7 @@ public class DiskBufferPool implements BufferPool {
         this.logger = logger;
 
         try {
-            Files.createDirectories(Paths.get(DATA_DIR));
+            Files.createDirectories(Paths.get(dataDir));
         } catch (IOException e) {
             throw new RuntimeException("Failed to create data directory", e);
         }
@@ -170,7 +176,7 @@ public class DiskBufferPool implements BufferPool {
     }
 
     private TableFile getTableFile(String tableName) {
-        return tableFiles.computeIfAbsent(tableName, k -> new TableFile(tableName));
+        return tableFiles.computeIfAbsent(tableName, k -> new TableFile(tableName, dataDir));
     }
 
     public int getTablePageCount(String tableName) {
@@ -208,9 +214,9 @@ public class DiskBufferPool implements BufferPool {
         private RandomAccessFile raf;
         private int pageCount;
 
-        TableFile(String tableName) {
+        TableFile(String tableName, String dataDir) {
             this.tableName = tableName;
-            this.filePath = Paths.get(DATA_DIR, tableName + ".dat");
+            this.filePath = Paths.get(dataDir, tableName + ".dat");
             try {
                 if (Files.exists(filePath)) {
                     this.raf = new RandomAccessFile(filePath.toFile(), "rw");

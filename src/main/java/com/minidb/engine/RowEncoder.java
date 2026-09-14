@@ -65,7 +65,7 @@ public final class RowEncoder {
             ColumnDef col = columns.get(i);
             switch (col.type()) {
                 case INT -> buf.putInt((Integer) values[i]);
-                case FLOAT -> buf.putDouble((Double) values[i]);
+                case FLOAT -> buf.putDouble(((Number) values[i]).doubleValue());
                 case VARCHAR -> {
                     byte[] bytes = ((String) values[i]).getBytes(StandardCharsets.UTF_8);
                     buf.putShort((short) bytes.length);

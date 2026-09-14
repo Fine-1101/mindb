@@ -22,10 +22,9 @@ import com.minidb.plan.SeqScan;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -43,20 +42,18 @@ class EngineDiskIntegrationTest {
     private static final String COURSE = "course";
     private static final Position POS = new Position(1, 1);
 
+    @TempDir
+    Path dataDir;
+
     private DiskBufferPool pool;
     private MemoryCatalog catalog;
     private Engine engine;
 
     @BeforeEach
-    void setUp() throws IOException {
-        // 清理磁盘文件
-        Files.deleteIfExists(Paths.get("data", STUDENT + ".dat"));
-        Files.deleteIfExists(Paths.get("data", COURSE + ".dat"));
-        Files.deleteIfExists(Paths.get("data", "catalog.dat"));
-
+    void setUp() {
         // 用 MemoryCatalog（元数据不持久化，只测页数据持久化）
         catalog = new MemoryCatalog();
-        pool = new DiskBufferPool(16);
+        pool = new DiskBufferPool(16, dataDir.toString(), null);
         engine = new Engine(catalog, pool);
     }
 
@@ -64,13 +61,6 @@ class EngineDiskIntegrationTest {
     void tearDown() {
         if (pool != null) {
             pool.close();
-        }
-        try {
-            Files.deleteIfExists(Paths.get("data", STUDENT + ".dat"));
-            Files.deleteIfExists(Paths.get("data", COURSE + ".dat"));
-            Files.deleteIfExists(Paths.get("data", "catalog.dat"));
-        } catch (IOException e) {
-            // ignore
         }
     }
 
@@ -154,7 +144,7 @@ class EngineDiskIntegrationTest {
         pool.close();
 
         // 重启：新建 pool + engine，用 recoverTablePages 恢复页映射
-        pool = new DiskBufferPool(16);
+        pool = new DiskBufferPool(16, dataDir.toString(), null);
         engine = new Engine(catalog, pool);
         engine.recoverTablePages(STUDENT, pool.getTablePageCount(STUDENT));
 
@@ -208,7 +198,7 @@ class EngineDiskIntegrationTest {
         pool.close();
 
         // 重启
-        pool = new DiskBufferPool(16);
+        pool = new DiskBufferPool(16, dataDir.toString(), null);
         engine = new Engine(catalog, pool);
         engine.recoverTablePages(STUDENT, pool.getTablePageCount(STUDENT));
 
@@ -255,7 +245,7 @@ class EngineDiskIntegrationTest {
         pool.close();
 
         // 重启
-        pool = new DiskBufferPool(16);
+        pool = new DiskBufferPool(16, dataDir.toString(), null);
         engine = new Engine(catalog, pool);
         engine.recoverTablePages(STUDENT, pool.getTablePageCount(STUDENT));
         engine.recoverTablePages(COURSE, pool.getTablePageCount(COURSE));

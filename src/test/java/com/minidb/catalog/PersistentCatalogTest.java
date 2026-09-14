@@ -2,28 +2,23 @@ package com.minidb.catalog;
 
 import com.minidb.common.DataType;
 import com.minidb.common.MiniDbException;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Paths;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class PersistentCatalogTest {
 
-    private static final String CATALOG_FILE = "data/catalog.dat";
-
-    @BeforeEach
-    void setUp() throws IOException {
-        Files.deleteIfExists(Paths.get(CATALOG_FILE));
-    }
+    @TempDir
+    Path dataDir;
 
     @Test
     void createThenFindTableAndColumns() throws MiniDbException {
-        PersistentCatalog catalog = new PersistentCatalog();
+        PersistentCatalog catalog = new PersistentCatalog(dataDir.toString());
         TableDef def = new TableDef("users", List.of(
                 new ColumnDef("id", DataType.INT, 0),
                 new ColumnDef("name", DataType.VARCHAR, 32)
@@ -38,7 +33,7 @@ class PersistentCatalogTest {
 
     @Test
     void persistAndReload() throws MiniDbException {
-        PersistentCatalog catalog = new PersistentCatalog();
+        PersistentCatalog catalog = new PersistentCatalog(dataDir.toString());
         catalog.createTable(new TableDef("users", List.of(
                 new ColumnDef("id", DataType.INT, 0),
                 new ColumnDef("name", DataType.VARCHAR, 32)
@@ -48,9 +43,9 @@ class PersistentCatalogTest {
                 new ColumnDef("user_id", DataType.INT, 0)
         )));
 
-        assertTrue(Files.exists(Paths.get(CATALOG_FILE)));
+        assertTrue(Files.exists(dataDir.resolve("catalog.dat")));
 
-        PersistentCatalog reloaded = new PersistentCatalog();
+        PersistentCatalog reloaded = new PersistentCatalog(dataDir.toString());
 
         assertTrue(reloaded.findTable("users").isPresent());
         assertTrue(reloaded.findTable("orders").isPresent());
@@ -66,7 +61,7 @@ class PersistentCatalogTest {
 
     @Test
     void duplicateCreateThrowsSemantic() throws MiniDbException {
-        PersistentCatalog catalog = new PersistentCatalog();
+        PersistentCatalog catalog = new PersistentCatalog(dataDir.toString());
         TableDef def = new TableDef("users", List.of(
                 new ColumnDef("id", DataType.INT, 0)
         ));
@@ -84,12 +79,12 @@ class PersistentCatalogTest {
 
     @Test
     void reloadedDuplicateCreateThrowsSemantic() throws MiniDbException {
-        PersistentCatalog catalog = new PersistentCatalog();
+        PersistentCatalog catalog = new PersistentCatalog(dataDir.toString());
         catalog.createTable(new TableDef("users", List.of(
                 new ColumnDef("id", DataType.INT, 0)
         )));
 
-        PersistentCatalog reloaded = new PersistentCatalog();
+        PersistentCatalog reloaded = new PersistentCatalog(dataDir.toString());
         MiniDbException e = assertThrows(MiniDbException.class,
                 () -> reloaded.createTable(new TableDef("users", List.of(
                         new ColumnDef("id", DataType.INT, 0)
@@ -99,14 +94,14 @@ class PersistentCatalogTest {
 
     @Test
     void findMissingReturnsEmpty() throws MiniDbException {
-        PersistentCatalog catalog = new PersistentCatalog();
+        PersistentCatalog catalog = new PersistentCatalog(dataDir.toString());
         assertTrue(catalog.findTable("non_existent").isEmpty());
         assertTrue(catalog.findColumn("non_existent", "col").isEmpty());
     }
 
     @Test
     void getTypeMissingColumnThrows() throws MiniDbException {
-        PersistentCatalog catalog = new PersistentCatalog();
+        PersistentCatalog catalog = new PersistentCatalog(dataDir.toString());
         catalog.createTable(new TableDef("users", List.of(
                 new ColumnDef("id", DataType.INT, 0)
         )));
@@ -118,7 +113,7 @@ class PersistentCatalogTest {
 
     @Test
     void getTypeMissingTableThrows() throws MiniDbException {
-        PersistentCatalog catalog = new PersistentCatalog();
+        PersistentCatalog catalog = new PersistentCatalog(dataDir.toString());
         MiniDbException e = assertThrows(MiniDbException.class,
                 () -> catalog.getType("non_existent", "id"));
         assertEquals(MiniDbException.Phase.SEMANTIC, e.phase());
@@ -126,7 +121,7 @@ class PersistentCatalogTest {
 
     @Test
     void identifiersAreCaseInsensitive() throws MiniDbException {
-        PersistentCatalog catalog = new PersistentCatalog();
+        PersistentCatalog catalog = new PersistentCatalog(dataDir.toString());
         catalog.createTable(new TableDef("Student", List.of(
                 new ColumnDef("ID", DataType.INT, 0),
                 new ColumnDef("Name", DataType.VARCHAR, 16)

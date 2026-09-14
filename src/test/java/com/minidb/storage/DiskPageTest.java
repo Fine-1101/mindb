@@ -5,6 +5,7 @@ import com.minidb.buffer.BufferPoolStats;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import com.minidb.catalog.ColumnDef;
 import com.minidb.common.DataType;
 import com.minidb.engine.RowEncoder;
@@ -12,6 +13,7 @@ import java.util.List;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -21,28 +23,22 @@ class DiskPageTest {
     private static final String TEST_TABLE = "test_table";
     private DiskBufferPool pool;
 
+    @TempDir
+    Path dataDir;
+
     @BeforeEach
-    void setUp() throws IOException {
+    void setUp() {
         // 先关闭可能残留的 pool
         if (pool != null) {
             pool.close();
         }
-        // 清理测试数据
-        Files.deleteIfExists(Paths.get("data", TEST_TABLE + ".dat"));
-        pool = new DiskBufferPool(3);
+        pool = new DiskBufferPool(3, dataDir.toString(), null);
     }
 
     @AfterEach
     void tearDown() {
         if (pool != null) {
             pool.close();
-        }
-        try {
-            Files.deleteIfExists(Paths.get("data", TEST_TABLE + ".dat"));
-            Files.deleteIfExists(Paths.get("data", "table_a.dat"));
-            Files.deleteIfExists(Paths.get("data", "table_b.dat"));
-        } catch (IOException e) {
-            // ignore
         }
     }
 
@@ -61,7 +57,7 @@ class DiskPageTest {
 
         // 关闭并重新打开
         pool.close();
-        pool = new DiskBufferPool(3);
+        pool = new DiskBufferPool(3, dataDir.toString(), null);
         Page loadedPage = pool.getPage(TEST_TABLE, 0);
 
         assertNotNull(loadedPage);
@@ -86,7 +82,7 @@ class DiskPageTest {
         pool.flushAll();
 
         pool.close();
-        pool = new DiskBufferPool(3);
+        pool = new DiskBufferPool(3, dataDir.toString(), null);
         Page loaded1 = pool.getPage(TEST_TABLE, 0);
         Page loaded2 = pool.getPage(TEST_TABLE, 1);
         Page loaded3 = pool.getPage(TEST_TABLE, 2);
@@ -102,7 +98,7 @@ class DiskPageTest {
 
     @Test
     void evictionWritesBack() throws IOException {
-        DiskBufferPool smallPool = new DiskBufferPool(2);
+        DiskBufferPool smallPool = new DiskBufferPool(2, dataDir.toString(), null);
 
         Page page1 = smallPool.newPage(TEST_TABLE);
         page1.insertRow(new byte[]{1, 2, 3});
@@ -116,11 +112,11 @@ class DiskPageTest {
         smallPool.flushAll();
         smallPool.close();
 
-        long fileLength = Files.size(Paths.get("data", TEST_TABLE + ".dat"));
+        long fileLength = Files.size(dataDir.resolve(TEST_TABLE + ".dat"));
         long expectedLength = 3L * (Page.PAGE_SIZE + Page.DISK_PREFIX_SIZE);
         assertEquals(expectedLength, fileLength, "文件长度应该等于 3 页");
 
-        DiskBufferPool newPool = new DiskBufferPool(3);
+        DiskBufferPool newPool = new DiskBufferPool(3, dataDir.toString(), null);
         Page loaded1 = newPool.getPage(TEST_TABLE, 0);
         Page loaded2 = newPool.getPage(TEST_TABLE, 1);
         Page loaded3 = newPool.getPage(TEST_TABLE, 2);
@@ -193,7 +189,7 @@ class DiskPageTest {
         pool.close();
 
         // 重启
-        pool = new DiskBufferPool(3);
+        pool = new DiskBufferPool(3, dataDir.toString(), null);
         Page loadedPage = pool.getPage(TEST_TABLE, 0);
         assertNotNull(loadedPage, "重启后页应该存在");
 
@@ -239,7 +235,7 @@ class DiskPageTest {
         pool.close();
 
         // 重启
-        pool = new DiskBufferPool(3);
+        pool = new DiskBufferPool(3, dataDir.toString(), null);
         Page loadedPage = pool.getPage(TEST_TABLE, 0);
         assertNotNull(loadedPage, "重启后页应该存在");
 
@@ -267,7 +263,7 @@ class DiskPageTest {
         pool.close();
 
         // 重启
-        pool = new DiskBufferPool(3);
+        pool = new DiskBufferPool(3, dataDir.toString(), null);
         Page loadedA = pool.getPage("table_a", 0);
         Page loadedB = pool.getPage("table_b", 0);
 

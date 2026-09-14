@@ -102,30 +102,36 @@ public class MiniDB {
 
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(System.in))) {
             while (true) {
-                System.out.print(PROMPT);
-                System.out.flush();
+                StringBuilder buffer = new StringBuilder();
+                while (true) {
+                    System.out.print(buffer.length() == 0 ? PROMPT : "   > ");  // 首行 PROMPT，续行缩进提示
+                    System.out.flush();
 
-                String line = reader.readLine();
-                if (line == null) break;
-                line = line.trim();
-                if (line.isEmpty()) continue;
+                    String line = reader.readLine();
+                    if (line == null) break;
 
-                if ("exit".equalsIgnoreCase(line) || "quit".equalsIgnoreCase(line)) {
-                    System.out.println("Bye!");
-                    break;
-                }
-
-                // .trace 命令
-                if (line.startsWith(".trace ")) {
-                    String sql = line.substring(7).trim();
-                    if (!sql.isEmpty()) {
-                        db.traceSql(sql);
+                    // exit/quit 只在首行独立出现时生效
+                    if (buffer.length() == 0 && ("exit".equalsIgnoreCase(line.trim())
+                            || "quit".equalsIgnoreCase(line.trim()))) {
+                        System.out.println("Bye!");
+                        return;
                     }
-                    continue;
-                }
 
-                // 普通 SQL
-                db.executeSql(line);
+                    // .trace 命令也只在首行独立出现时生效
+                    if (buffer.length() == 0 && line.trim().startsWith(".trace ")) {
+                        db.traceSql(line.substring(7).trim());
+                        continue;
+                    }
+
+                    buffer.append(line).append('\n');  // 保留换行（Lexer 会跳过）
+
+                    // 检查是否有分号 —— 有就提交，没有就继续攒行
+                    if (line.trim().endsWith(";")) {
+                        String sql = buffer.toString();
+                        buffer.setLength(0);            // 清空 buffer 准备下一条
+                        db.executeSql(sql);
+                    }
+                }
             }
         } catch (IOException e) {
             System.err.println("Error reading input: " + e.getMessage());
@@ -215,11 +221,11 @@ public class MiniDB {
                 PlanNode plan = planner.plan(stmt);
 
                 System.out.println("── Plan(优化前) ──");
-                printPlanTree(plan, "  ");
+                System.out.println("  " + PlanPrinter.print(plan));
 
                 PlanNode optimized = optimizer.optimize(plan);
                 System.out.println("── Plan(优化后) ──");
-                printPlanTree(optimized, "  ");
+                System.out.println("  " + PlanPrinter.print(optimized));
 
                 // 5. 执行结果
                 System.out.println("── Result ──");
@@ -339,54 +345,6 @@ public class MiniDB {
     private String padRight(String s, int width) {
         if (s.length() >= width) return s;
         return s + " ".repeat(width - s.length());
-    }
-
-    /** 打印计划树（缩进格式）。 */
-    private void printPlanTree(PlanNode plan, String indent) {
-        switch (plan) {
-            case Project p -> {
-                String cols = p.columns() != null ? String.join(",", p.columns()) : "*";
-                System.out.println(indent + "Project[" + (p.distinct() ? "distinct " : "") + cols + "]");
-                printPlanTree(p.child(), indent + "  ");
-            }
-            case AggregatePlan a -> {
-                String aggs = a.aggregates().stream().map(FuncCall::display)
-                        .reduce((x, y) -> x + "," + y).orElse("");
-                System.out.println(indent + "Aggregate[" + aggs + "]");
-                printPlanTree(a.input(), indent + "  ");
-            }
-            case Filter f -> {
-                System.out.println(indent + "Filter[" + exprToString(f.condition()) + "]");
-                printPlanTree(f.child(), indent + "  ");
-            }
-            case SeqScan s -> System.out.println(indent + "SeqScan(" + s.tableName()
-                    + (s.cols() == null ? "" : "{cols:" + String.join(",", s.cols()) + "}") + ")");
-            case CreateTablePlan p -> System.out.println(indent + "CreateTable(" + p.table().tableName() + ")");
-            case InsertPlan p -> System.out.println(indent + "Insert(" + p.tableName() + ", " + p.rows().size() + " rows)");
-            case DeletePlan p -> {
-                String cond = p.condition() != null ? exprToString(p.condition()) : "ALL";
-                System.out.println(indent + "Delete(" + p.tableName() + ", " + cond + ")");
-            }
-            case UpdatePlan p -> {
-                String sets = p.sets().stream()
-                        .map(s -> s.column().column() + "=" + exprToString(s.value()))
-                        .reduce((a, b) -> a + "," + b).orElse("");
-                String cond = p.condition() != null ? exprToString(p.condition()) : "ALL";
-                System.out.println(indent + "Update(" + p.tableName() + ", [" + sets + "], " + cond + ")");
-            }
-            case SortPlan p -> {
-                String keys = p.keys().stream()
-                        .map(k -> k.column() + (k.asc() ? " ASC" : " DESC"))
-                        .reduce((a, b) -> a + "," + b).orElse("");
-                System.out.println(indent + "Sort[" + keys + "]");
-                printPlanTree(p.child(), indent + "  ");
-            }
-            case JoinPlan p -> {
-                System.out.println(indent + "Join[on " + exprToString(p.condition()) + "]");
-                printPlanTree(p.left(), indent + "  ");
-                printPlanTree(p.right(), indent + "  ");
-            }
-        }
     }
 
     // ------------------------------------------------------------------

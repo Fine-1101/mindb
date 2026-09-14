@@ -46,9 +46,10 @@ class LiveReproductionTest {
 
         // ── Plan(优化前) ──
         assertSection(output, "── Plan(优化前) ──");
-        assertContains(output, "Project[name]", "Plan 应含 Project[name]");
-        assertContains(output, "Filter[", "Plan 应含 Filter");
-        assertContains(output, "SeqScan(student)", "Plan 应含 SeqScan(student)");
+        assertContains(output, "(Project ", "Plan 应含 Project");
+        assertContains(output, "[name]", "Plan 应含投影列 [name]");
+        assertContains(output, "(Filter ", "Plan 应含 Filter");
+        assertContains(output, "SeqScan student", "Plan 应含 SeqScan student");
 
         // ── Plan(优化后) ──
         assertSection(output, "── Plan(优化后) ──");

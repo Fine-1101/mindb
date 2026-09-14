@@ -140,7 +140,8 @@ class AggregateEndToEndTest {
         // 五段 + AST 聚合项 + 优化前/后 Aggregate 节点（Filter 保留、规则4 标注 SeqScan cols）
         assertTrue(out.contains("── Tokens ──"));
         assertTrue(out.contains("(agg COUNT(*))"), "AST 应含聚合项，实际: " + out);
-        assertTrue(out.contains("Aggregate[COUNT(*),AVG(score)]"), "Plan 应含 Aggregate 节点");
+        assertTrue(out.contains("(Aggregate "), "Plan 应含 Aggregate 节点");
+        assertTrue(out.contains("[COUNT(*), AVG(score)]"), "Plan 应含聚合列表");
         assertTrue(out.contains("── Result ──"));
         // WHERE id>1 过滤后剩 Alice(85.0)/Bob(90.0)：COUNT=2、AVG=87.5
         assertTrue(out.contains("87.5"), "过滤后 AVG(score)=87.5，实际: " + out);

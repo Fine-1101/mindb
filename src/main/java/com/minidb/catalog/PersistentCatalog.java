@@ -18,11 +18,19 @@ import java.util.stream.Collectors;
  * - 重启后重名表报错
  */
 public class PersistentCatalog implements Catalog {
-    private static final String CATALOG_FILE = "data/catalog.dat";
+    private final String dataDir;
+    private final Path catalogFile;
     private final Map<String, TableDef> tables;
     private boolean loaded;
 
     public PersistentCatalog() {
+        this("data");
+    }
+
+    /** @param dataDir catalog.dat 所在目录（测试传独立目录，生产用 "data"） */
+    public PersistentCatalog(String dataDir) {
+        this.dataDir = dataDir;
+        this.catalogFile = Paths.get(dataDir, "catalog.dat");
         this.tables = new HashMap<>();
         this.loaded = false;
         load();
@@ -67,13 +75,12 @@ public class PersistentCatalog implements Catalog {
      * 加载 Catalog 文件
      */
     private void load() {
-        Path path = Paths.get(CATALOG_FILE);
-        if (!Files.exists(path)) {
+        if (!Files.exists(catalogFile)) {
             loaded = true;
             return;
         }
 
-        try (DataInputStream dis = new DataInputStream(Files.newInputStream(path))) {
+        try (DataInputStream dis = new DataInputStream(Files.newInputStream(catalogFile))) {
             int tableCount = dis.readInt();
             for (int i = 0; i < tableCount; i++) {
                 TableDef def = readTableDef(dis);
@@ -91,8 +98,8 @@ public class PersistentCatalog implements Catalog {
      */
     private void save() {
         try {
-            Files.createDirectories(Paths.get("data"));
-            try (DataOutputStream dos = new DataOutputStream(Files.newOutputStream(Paths.get(CATALOG_FILE)))) {
+            Files.createDirectories(Paths.get(dataDir));
+            try (DataOutputStream dos = new DataOutputStream(Files.newOutputStream(catalogFile))) {
                 dos.writeInt(tables.size());
                 for (TableDef def : tables.values()) {
                     writeTableDef(dos, def);

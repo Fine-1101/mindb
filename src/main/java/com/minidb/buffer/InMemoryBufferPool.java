@@ -48,7 +48,6 @@ public class InMemoryBufferPool implements BufferPool {
 
     @Override
     public void flushAll() {
-        // 纯内存实现：仅脏页“写盘”（标记干净），无实际磁盘 I/O
         for (Map<Integer, Page> pages : tablePages.values()) {
             for (Page page : pages.values()) {
                 if (page.isDirty()) {
@@ -66,7 +65,7 @@ public class InMemoryBufferPool implements BufferPool {
         }
         Page page = pages.get(pageId);
         if (page != null && page.isDirty()) {
-            page.markClean();  // 内存版"刷盘" = 标记干净
+            page.markClean();
         }
     }
 
@@ -78,8 +77,6 @@ public class InMemoryBufferPool implements BufferPool {
         }
         Page page = pages.get(pageId);
         if (page != null) {
-            // 内存版无页级释放，仅清空页内容（MemoryPage 无 clear 方法，替换为新页）
-            // 为保持简单，直接标记页为空闲语义：不移除，仅记录
             pages.put(pageId, page);
         }
     }

@@ -110,17 +110,14 @@ public class BufferPoolWithStrategy implements BufferPool {
 
     @Override
     public void flushAll() {
-        // 纯内存实现，无需 flush
     }
 
     @Override
     public void flushPage(String tableName, int pageId) {
-        // 纯内存实现，无需 flush
     }
 
     @Override
     public void freePage(String tableName, int pageId) {
-        // 内存版无页级释放，空实现（保持接口一致）
     }
 
     @Override

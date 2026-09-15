@@ -5,7 +5,7 @@ import com.minidb.common.MiniDbException;
 
 import java.util.Optional;
 
-/** 符号表：表/列存在性检查、名字绑定、类型查询。 */
+/** 表 */
 public interface Catalog {
     /** 注册表定义，表已存在抛 SEMANTIC 错误。 */
     void createTable(TableDef def) throws MiniDbException;

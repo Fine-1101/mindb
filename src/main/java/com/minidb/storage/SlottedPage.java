@@ -18,9 +18,6 @@ public class SlottedPage implements Page {
         this.dirty = false;
     }
 
-    /**
-     * 从磁盘数据构造 SlottedPage
-     */
     public SlottedPage(int pageId, byte[] diskData, int slotCount) {
         this.pageId = pageId;
         this.data = new byte[PAGE_SIZE];
@@ -38,7 +35,7 @@ public class SlottedPage implements Page {
         // 根据 slotCount 计算 freeStart
         this.freeStart = slotCount * SLOT_ENTRY_SIZE;
 
-        // 找所有有效行的最小偏移（尾部生长）
+        // 找所有有效行的最小偏移
         int minRowStart = PAGE_SIZE;
         boolean hasValidRow = false;
         for (int i = 0; i < slotCount; i++) {
@@ -154,9 +151,6 @@ public class SlottedPage implements Page {
         return slotCount;
     }
 
-    /**
-     * 获取页体数据（不含槽数前缀），用于写盘
-     */
     public byte[] getPageData() {
         return data;
     }

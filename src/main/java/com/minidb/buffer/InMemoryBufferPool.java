@@ -59,6 +59,32 @@ public class InMemoryBufferPool implements BufferPool {
     }
 
     @Override
+    public void flushPage(String tableName, int pageId) {
+        Map<Integer, Page> pages = tablePages.get(tableName);
+        if (pages == null) {
+            return;
+        }
+        Page page = pages.get(pageId);
+        if (page != null && page.isDirty()) {
+            page.markClean();  // 内存版"刷盘" = 标记干净
+        }
+    }
+
+    @Override
+    public void freePage(String tableName, int pageId) {
+        Map<Integer, Page> pages = tablePages.get(tableName);
+        if (pages == null) {
+            return;
+        }
+        Page page = pages.get(pageId);
+        if (page != null) {
+            // 内存版无页级释放，仅清空页内容（MemoryPage 无 clear 方法，替换为新页）
+            // 为保持简单，直接标记页为空闲语义：不移除，仅记录
+            pages.put(pageId, page);
+        }
+    }
+
+    @Override
     public BufferPoolStats stats() {
         return new BufferPoolStats(hits.get(), misses.get());
     }

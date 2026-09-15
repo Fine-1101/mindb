@@ -171,6 +171,34 @@ public class DiskBufferPool implements BufferPool {
     }
 
     @Override
+    public void flushPage(String tableName, int pageId) {
+        if (closed) {
+            return;
+        }
+        String key = tableName + ":" + pageId;
+        Page page = cache.get(key);
+        if (page != null && page.isDirty()) {
+            writePage(tableName, page);
+        }
+    }
+
+    @Override
+    public void freePage(String tableName, int pageId) {
+        if (closed) {
+            return;
+        }
+        String key = tableName + ":" + pageId;
+        // 用空页替换缓存中的页（槽数清 0，freeSpace 恢复满页）
+        SlottedPage empty = new SlottedPage(pageId);
+        empty.markDirty();
+        cache.put(key, empty);
+        synchronized (accessOrder) {
+            accessOrder.remove(key);
+            accessOrder.add(key);
+        }
+    }
+
+    @Override
     public BufferPoolStats stats() {
         return new BufferPoolStats(hits.get(), misses.get());
     }

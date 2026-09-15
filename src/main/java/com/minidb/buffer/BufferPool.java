@@ -12,4 +12,10 @@ public interface BufferPool {
     void flushAll();
 
     BufferPoolStats stats();
+
+    /** 精确刷一页：若该页在缓存且为脏页，则写盘。 */
+    void flushPage(String tableName, int pageId);
+
+    /** 释放一页：标记页为空闲（槽数清 0），后续 newPage 可复用。 */
+    void freePage(String tableName, int pageId);
 }

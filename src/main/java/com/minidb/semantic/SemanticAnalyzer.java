@@ -30,19 +30,6 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
-/**
- * 语义分析器：存在性 / INSERT 匹配 / WHERE 布尔检查，纯校验无副作用（不写 Catalog、不改 AST）。
- *
- * <p>错误统一抛 MiniDbException(SEMANTIC, 出错标识符自己的 AST 位置, 原因)——
- * 位置预检查在 Semantic 完成（拍板项2），Catalog 的无位置报错仅作兜底。
- *
- * <p>约定：语句节点的 pos 为表名 token 的位置（Parser 侧保证），表不存在类错误据此定位；
- * 列位置由 InsertStmt/SelectStmt 中的 ColumnRef 携带。
- *
- * <p>D5 五特性检查（拍板表见 docs/D5.md）：UPDATE 四查、ORDER BY/GROUP BY 键检查、
- * JOIN 双表列解析（限定名恒可解析、非限定名二义报错）、NULL 可赋任意列、
- * GROUP BY 的 SELECT 非聚合列 ⊆ 分组列集。
- */
 public class SemanticAnalyzer {
 
     /** VARCHAR 的 2B 长度上限（RowEncoder putShort），超限会在编码时溢出。 */

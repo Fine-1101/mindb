@@ -28,26 +28,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
-/**
- * Optimizer：规则式优化（返回新树，不改输入）。
- *
- * <p>规则 1 常量折叠：条件中纯字面量子树先算——算术（1+2→3）、比较（1=1→TRUE）、
- * NOT TRUE→FALSE、NEG 字面量取负；含列引用的子树不动。
- *
- * <p>规则 2 布尔化简：x AND TRUE→x、x AND FALSE→FALSE、x OR FALSE→x、x OR TRUE→TRUE。
- *
- * <p>规则 3 Filter 合并：Filter(Filter(x,p),q) → Filter(x, q AND p)（Planner 不产嵌套 Filter，
- * 作为可展示的等价变换规则，与手工构造计划互通）。
- *
- * <p>规则 4 投影裁剪：从 Project/AggregatePlan 顶层收集全树实际引用的列集，
- * 标注到 SeqScan{cols}（SELECT * 透传不标注）。行式存储无列裁剪执行收益，
- * 标注即"读了哪些列"的裁剪证明（.trace 演示载体）。
- *
- * <p>结构消除（P1）：条件折叠为 TRUE 的 Filter 节点整体消除（child 顶上）；
- * SELECT * 的透传 Project 消除。
- * 条件统一处理：Filter.condition 与 DeletePlan.condition 都做折叠。
- * 折叠结果字面量的位置 = 被折叠表达式自己的位置。
- */
 public class Optimizer {
 
     public PlanNode optimize(PlanNode plan) {

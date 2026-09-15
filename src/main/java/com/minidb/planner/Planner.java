@@ -28,21 +28,6 @@ import com.minidb.plan.UpdatePlan;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Planner：AST → 逻辑计划树（十节点）。
- *
- * <p>转换规则：CREATE→CreateTablePlan、INSERT→InsertPlan（targetColumns 展开列序）、
- * SELECT→SortPlan(Project(...(Filter(SeqScan|JoinPlan))))（按需叠加：JOIN 数据源 → WHERE Filter →
- * 聚合/GROUP BY → Project → 最外层 Sort）、DELETE→DeletePlan、UPDATE→UpdatePlan。
- *
- * <p>GROUP BY 形态（D5 拍板 12）：Project(AggregatePlan(input, aggregates, groupBy))——
- * AggregatePlan 输出行 = [组键值...] ++ [聚合值...]（列名 FuncCall.display()），顶层 Project
- * 按 SELECT 项重排（契约限制：普通列与聚合分列存储，输出序 = [普通列..., 聚合项...]）。
- *
- * <p>SortPlan 最外层（D5 拍板 1/7）：DISTINCT 之后、输出前；键列须 ⊆ 输出列（Semantic 已查）。
- *
- * <p>前置：stmt 已通过 SemanticAnalyzer.analyze（存在性/类型已检查，此处不再重复校验）。
- */
 public class Planner {
 
     private final Catalog catalog;

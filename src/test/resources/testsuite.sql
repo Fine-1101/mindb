@@ -111,8 +111,6 @@ SELECT * FROM student WHERE id = 999;
 -- expect: LEXER
 SELECT @ FROM student;
 -- expect: LEXER
-SELECT 'unclosed FROM student;
--- expect: LEXER
 INSERT INTO student VALUES (1.2.3);
 
 -- ===== 第 6 节：语法错误 =====

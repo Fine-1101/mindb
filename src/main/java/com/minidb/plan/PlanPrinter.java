@@ -12,16 +12,13 @@ import com.minidb.common.DataType;
 import java.util.List;
 
 /**
- * 计划树 S-expression 单行打印（优化前后各打一次，作为"优化前后可展示、可证明等价"的载体）。
- *
- * <pre>
+ * 计划树 S-expression 单行打印
  * (CreateTable users)
  * (Insert users [id, name] [(1, 'Tom'), (2, 'Alice')])
  * (Delete users (= a 2))          无 WHERE 时打印 (Delete users *)
  * (SeqScan users)
  * (Filter (SeqScan users) (= a 2))
  * (Project (Filter (SeqScan users) (= a 2)) [a, b])    SELECT * 时列打印 *
- * </pre>
  */
 public class PlanPrinter implements PlanVisitor<String> {
 

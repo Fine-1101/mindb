@@ -81,10 +81,10 @@ public class Planner {
                     : select.groupBy().stream().map(ColumnRef::column).toList();
             PlanNode agg = new AggregatePlan(source, aggregates, groupBy);
             if (select.groupBy() == null) {
-                // 标量聚合：D4 形态（无 Project 层；语义层已拒绝与普通列混写）
+                // 标量聚合：无 Project 层；语义层已拒绝与普通列混写
                 result = agg;
             } else {
-                // GROUP BY：顶层 Project 重排（[组键...] ++ [聚合值...] → [普通列..., 聚合项...]）
+                // Aggregate 输出所有分组键，Project只选取select需要的
                 List<String> columns = new ArrayList<>();
                 if (select.columns() != null) {
                     select.columns().forEach(c -> columns.add(c.column()));
@@ -98,7 +98,7 @@ public class Planner {
             result = new Project(source, columns, select.distinct());
         }
 
-        // ORDER BY：最外层（DISTINCT 之后输出前，拍板 1/7）
+        // ORDER BY：最外层（DISTINCT 之后输出前）
         if (select.orderBy() != null) {
             List<SortKey> keys = select.orderBy().stream()
                     .map(k -> new SortKey(k.column().column(), k.asc())).toList();

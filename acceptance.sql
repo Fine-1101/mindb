@@ -366,5 +366,3 @@ SELECT name FROM Student WHERE ID = 1;
 -- L7 未闭合字符串（脚本切分按行尾最后一个 ';' 截断隔离本语句）
 -- expect: LEXER
 SELECT 'abc;
-
-

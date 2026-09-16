@@ -86,14 +86,11 @@ public final class TypeRules {
     }
 
     /**
-     * 聚合函数结果类型（D4 拍板）：COUNT→INT（arg 任意或 *）；SUM 同参型数值；
+     * COUNT→INT（arg 任意或 *）；SUM 同参型数值；
      * AVG(INT/FLOAT)→FLOAT；MIN/MAX(T)→T（数值或 VARCHAR）。未知函数/不支持参数 → empty。
-     *
-     * <p>NULL 参数（D5 拍板 6）：COUNT(NULL)→INT（运行时数为 0）；SUM/AVG/MIN/MAX(NULL)→NULL
+     * NULL 参数：COUNT(NULL)→INT（运行时数为 0）；SUM/AVG/MIN/MAX(NULL)→NULL
      * （全 NULL 输入无值可聚合）。运行时空值语义归执行器：COUNT(col) 数非 NULL 值；
      * SUM/AVG/MIN/MAX 忽略 NULL 输入，无任何非 NULL 输入→NULL；COUNT 永不 NULL（空表→0）。
-     *
-     * <p>COUNT 的 arg 可为 null（COUNT(*)），本方法不读 arg 值。
      */
     public static Optional<DataType> aggregate(String func, DataType arg) {
         return switch (func) {

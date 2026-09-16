@@ -64,9 +64,7 @@ public class Optimizer {
             case SeqScan scan -> scan;
             case CreateTablePlan create -> create;
             case InsertPlan insert -> insert;
-            // D5 三新节点（拍板 1）：UPDATE 条件折叠（SET 值非条件不折叠）；
-            // Sort 递归子树（键为列名非表达式）；JOIN 双侧递归 + ON 条件折叠（ON 折叠为 TRUE 不消除——
-            // INNER JOIN 去掉 ON = 交叉积，不等价）
+
             case UpdatePlan update -> new UpdatePlan(update.tableName(), update.sets(),
                     update.condition() == null ? null : fold(update.condition()));
             case SortPlan sort -> new SortPlan(rewrite(sort.child()), sort.keys());
@@ -80,14 +78,12 @@ public class Optimizer {
     // ==================================================================
 
     private PlanNode annotateColumns(PlanNode node) {
-        // Sort 在计划最外层：标注对象为其子树（Sort 键 ⊆ 输出列，随子树收集），标注后重新包上
+        // Sort 在计划最外层：递归子树后标注，标注后重新包上
         boolean sortTop = node instanceof SortPlan;
         PlanNode target = sortTop ? ((SortPlan) node).child() : node;
         boolean prunable = (target instanceof Project p && p.columns() != null)
                 || target instanceof AggregatePlan;
-        if (!prunable || hasJoin(target)) {
-            // SELECT * 透传 / DML / DDL 不标注；JOIN 树的列归属需限定名→表解析（本优化器无
-            // Catalog 上下文），标注降级不标注——行式存储整行解码，无执行差异（拍板：标注仅为证据）
+        if (!prunable || hasJoin(target)) { //project指定了列或者有聚合函数
             return node;
         }
         Set<String> cols = new LinkedHashSet<>();
@@ -108,6 +104,7 @@ public class Optimizer {
         return false;
     }
 
+    //收集所有被引用的列
     private void collectPlanColumns(PlanNode node, Set<String> cols) {
         if (node instanceof Project p) {
             if (p.columns() != null) {
@@ -130,7 +127,7 @@ public class Optimizer {
         }
         // SeqScan：终点
     }
-
+//从表达式树中提取列名
     private void collectExprColumns(Expression expr, Set<String> cols) {
         if (expr instanceof ColumnRef c) {
             cols.add(c.column());
@@ -139,11 +136,11 @@ public class Optimizer {
             collectExprColumns(b.right(), cols);
         } else if (expr instanceof UnaryExpr u) {
             collectExprColumns(u.operand(), cols);
-        } else if (expr instanceof FuncCall f) {
+        } else if (expr instanceof FuncCall f) {//遍历聚合函数参数
             collectExprColumns(f.arg(), cols);
         }
     }
-
+//标注
     private PlanNode withScanCols(PlanNode node, List<String> cols) {
         if (node instanceof SeqScan s) {
             return s.cols() == null ? new SeqScan(s.tableName(), cols) : s;
@@ -165,12 +162,12 @@ public class Optimizer {
     // ==================================================================
 
     private Expression fold(Expression expr) {
-        if (expr instanceof BinaryExpr bin) {
+        if (expr instanceof BinaryExpr bin) { //是否是二元表达式
             Expression left = fold(bin.left());
             Expression right = fold(bin.right());
             Expression folded = switch (bin.op()) {
-                case ADD, SUB, MUL, DIV -> foldArithmetic(bin, left, right);
-                case EQ, NE, LT, LE, GT, GE -> foldComparison(bin, left, right);
+                case ADD, SUB, MUL, DIV -> foldArithmetic(bin, left, right); //算数常量折叠
+                case EQ, NE, LT, LE, GT, GE -> foldComparison(bin, left, right); //比较常量折叠
                 case AND -> simplifyAnd(left, right, bin.pos());
                 case OR -> simplifyOr(left, right, bin.pos());
             };

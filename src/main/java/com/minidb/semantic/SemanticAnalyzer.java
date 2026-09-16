@@ -46,7 +46,7 @@ public class SemanticAnalyzer {
 
     /** 列解析器：单表 = 限定名匹配 + 存在性；JOIN = 双表解析（拍板 10）。infer 据此参数化。 */
     @FunctionalInterface
-    private interface ColumnResolver {
+    private interface ColumnResolver {//输入列名后输出列定义
         ColumnDef resolve(ColumnRef ref) throws MiniDbException;
     }
 
@@ -69,9 +69,9 @@ public class SemanticAnalyzer {
     /** 表达式类型推断（按列解析器；JOIN 上下文与单表共用一套推断）。 */
     private DataType infer(Expression expr, ColumnResolver resolver) throws MiniDbException {
         return switch (expr) {
-            case Literal lit -> lit.type();
-            case ColumnRef ref -> resolver.resolve(ref).type();
-            case BinaryExpr b -> {
+            case Literal lit -> lit.type(); //叶子结点
+            case ColumnRef ref -> resolver.resolve(ref).type();//叶子结点
+            case BinaryExpr b -> { //二元表达式
                 DataType lt = infer(b.left(), resolver);
                 DataType rt = infer(b.right(), resolver);
                 Optional<DataType> result = switch (b.op()) {
@@ -83,8 +83,8 @@ public class SemanticAnalyzer {
                         MiniDbException.Phase.SEMANTIC, b.pos(),
                         "类型不匹配: " + lt + " " + b.op() + " " + rt));
             }
-            case UnaryExpr u -> {
-                DataType ot = infer(u.operand(), resolver);
+            case UnaryExpr u -> { //一元表达式
+                DataType ot = infer(u.operand(), resolver); //获取操作数类型
                 yield TypeRules.unary(u.op(), ot).orElseThrow(() -> new MiniDbException(
                         MiniDbException.Phase.SEMANTIC, u.pos(),
                         "类型不匹配: " + u.op() + " " + ot));
@@ -233,7 +233,7 @@ public class SemanticAnalyzer {
                 throw new MiniDbException(MiniDbException.Phase.SEMANTIC, f.pos(),
                         "未知聚合函数: " + f.func());
             }
-            if (f.arg() == null && !"COUNT".equals(f.func())) {
+            if (f.arg() == null && !"COUNT".equals(f.func())) { //函数不是count且函数内部无参数
                 throw new MiniDbException(MiniDbException.Phase.SEMANTIC, f.pos(),
                         "只有 COUNT 支持 *: " + f.func());
             }
@@ -273,7 +273,7 @@ public class SemanticAnalyzer {
     private void checkOrderBy(SelectStmt s, ColumnResolver resolver) throws MiniDbException {
         Set<String> output = null; // null = SELECT *（全部列，存在性由 resolver 保证）
         if (s.groupBy() != null) {
-            output = new HashSet<>();
+            output = new HashSet<>();//有groupBy,收集project输出的所有列集
             if (s.columns() != null) {
                 for (ColumnRef c : s.columns()) {
                     output.add(c.column().toLowerCase(Locale.ROOT));
@@ -284,18 +284,18 @@ public class SemanticAnalyzer {
                     output.add(f.display().toLowerCase(Locale.ROOT));
                 }
             }
-        } else if (s.aggregates() != null) {
+        } else if (s.aggregates() != null) { //只有聚合函数
             output = new HashSet<>();
             for (FuncCall f : s.aggregates()) {
                 output.add(f.display().toLowerCase(Locale.ROOT));
             }
-        } else if (s.columns() != null) {
+        } else if (s.columns() != null) { //只有普通列
             output = new HashSet<>();
             for (ColumnRef c : s.columns()) {
                 output.add(c.column().toLowerCase(Locale.ROOT));
             }
         }
-        for (OrderKey k : s.orderBy()) {
+        for (OrderKey k : s.orderBy()) { //都不是，说明选择了所有的列
             resolver.resolve(k.column());
             if (output != null && !output.contains(k.column().column().toLowerCase(Locale.ROOT))) {
                 throw new MiniDbException(MiniDbException.Phase.SEMANTIC, k.column().pos(),
@@ -321,8 +321,8 @@ public class SemanticAnalyzer {
     private void checkUpdate(UpdateStmt s) throws MiniDbException {
         TableDef table = requireTable(s.tableName(), s.pos());
         for (SetClause set : s.sets()) {
-            ColumnDef col = resolveColumn(table.tableName(), set.column());
-            DataType valueType = infer(set.value(), table.tableName());
+            ColumnDef col = resolveColumn(table.tableName(), set.column());//查目标列定义，等号左侧
+            DataType valueType = infer(set.value(), table.tableName());//推断赋值表达式类型，等号右侧
             checkAssignable(valueType, col, set.value().pos());
             if (valueType == DataType.VARCHAR && set.value() instanceof Literal lit
                     && lit.value() instanceof String str) {
@@ -407,12 +407,14 @@ public class SemanticAnalyzer {
     private ColumnDef resolveJoinColumn(TableDef left, TableDef right, ColumnRef ref)
             throws MiniDbException {
         if (ref.table() != null) {
+            //ref.table是左表还是右表
             String tableName = ref.table().equalsIgnoreCase(left.tableName()) ? left.tableName()
                     : ref.table().equalsIgnoreCase(right.tableName()) ? right.tableName() : null;
-            if (tableName == null) {
+            if (tableName == null) { //如果都不是抛出异常
                 throw new MiniDbException(MiniDbException.Phase.SEMANTIC, ref.pos(),
                         "未知表限定符: " + ref.table());
             }
+            //这个表里没有这个列
             return catalog.findColumn(tableName, ref.column())
                     .orElseThrow(() -> new MiniDbException(MiniDbException.Phase.SEMANTIC, ref.pos(),
                             "列不存在: " + ref.column()));

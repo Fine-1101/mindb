@@ -15,7 +15,6 @@ import java.util.stream.Collectors;
  * - data/catalog.dat 存储 TableDef 列表
  * - CREATE TABLE 时追加写
  * - 启动时加载
- * - 重启后重名表报错
  */
 public class PersistentCatalog implements Catalog {
     private final String dataDir;
@@ -27,7 +26,6 @@ public class PersistentCatalog implements Catalog {
         this("data");
     }
 
-    /** @param dataDir catalog.dat 所在目录（测试传独立目录，生产用 "data"） */
     public PersistentCatalog(String dataDir) {
         this.dataDir = dataDir;
         this.catalogFile = Paths.get(dataDir, "catalog.dat");
@@ -71,9 +69,7 @@ public class PersistentCatalog implements Catalog {
                         "列不存在: " + table + "." + col));
     }
 
-    /**
-     * 加载 Catalog 文件
-     */
+    // 加载
     private void load() {
         if (!Files.exists(catalogFile)) {
             loaded = true;
@@ -93,9 +89,7 @@ public class PersistentCatalog implements Catalog {
         }
     }
 
-    /**
-     * 保存 Catalog 到文件
-     */
+    // 保存
     private void save() {
         try {
             Files.createDirectories(Paths.get(dataDir));

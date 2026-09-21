@@ -17,7 +17,6 @@ public class MemoryCatalog implements Catalog {
     public void createTable(TableDef def) throws MiniDbException {
         String key = def.tableName().toLowerCase();
         if (tables.containsKey(key)) {
-            // Catalog 不含源码位置：位置由 Semantic 层预检查时带上（D1 拍板项2），此处仅兜底
             throw new MiniDbException(MiniDbException.Phase.SEMANTIC, null,
                 "表已存在: " + def.tableName());
         }

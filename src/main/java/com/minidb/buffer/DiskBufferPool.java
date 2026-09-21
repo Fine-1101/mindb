@@ -33,7 +33,6 @@ public class DiskBufferPool implements BufferPool {
         this(capacity, "data", logger);
     }
 
-    /** @param dataDir 表数据文件目录（测试传独立目录，生产用 "data"） */
     public DiskBufferPool(int capacity, String dataDir, BufferLogger logger) {
         this.capacity = capacity;
         this.dataDir = dataDir;
@@ -79,7 +78,6 @@ public class DiskBufferPool implements BufferPool {
         }
         TableFile tf = getTableFile(tableName);
 
-        // 3. 检查 pageId 是否存在于文件中
         if (pageId < tf.getPageCount()) {
             SlottedPage page = tf.loadPage(pageId);
             if (page != null) {
@@ -88,7 +86,6 @@ public class DiskBufferPool implements BufferPool {
             }
         }
 
-        // 4. pageId 不存在于文件中 -> 返回 null（兜底，调用方应保证 pageId 合法）
         return null;
     }
 
@@ -146,7 +143,6 @@ public class DiskBufferPool implements BufferPool {
         if (!(page instanceof SlottedPage)) {
             return;
         }
-        // 复合缓存键后按表定向写盘：原实现遍历所有表文件试写，多表同号页会写错文件
         if (getTableFile(tableName).writePage((SlottedPage) page)) {
             page.markClean();
         }
@@ -171,6 +167,33 @@ public class DiskBufferPool implements BufferPool {
     }
 
     @Override
+    public void flushPage(String tableName, int pageId) {
+        if (closed) {
+            return;
+        }
+        String key = tableName + ":" + pageId;
+        Page page = cache.get(key);
+        if (page != null && page.isDirty()) {
+            writePage(tableName, page);
+        }
+    }
+
+    @Override
+    public void freePage(String tableName, int pageId) {
+        if (closed) {
+            return;
+        }
+        String key = tableName + ":" + pageId;
+        SlottedPage empty = new SlottedPage(pageId);
+        empty.markDirty();
+        cache.put(key, empty);
+        synchronized (accessOrder) {
+            accessOrder.remove(key);
+            accessOrder.add(key);
+        }
+    }
+
+    @Override
     public BufferPoolStats stats() {
         return new BufferPoolStats(hits.get(), misses.get());
     }
@@ -180,7 +203,6 @@ public class DiskBufferPool implements BufferPool {
     }
 
     public int getTablePageCount(String tableName) {
-        // computeIfAbsent：重启后的新 pool tableFiles 为空，TableFile 构造器会从磁盘文件长度恢复 pageCount
         return getTableFile(tableName).getPageCount();
     }
 
@@ -188,14 +210,10 @@ public class DiskBufferPool implements BufferPool {
         return new HashSet<>(cache.keySet());
     }
 
-    /**
-     * 关闭缓冲池，释放所有文件资源
-     */
     public void close() {
         if (closed) {
             return;
         }
-        // 必须先刷盘再置 closed：flushAll 开头有 if(closed) return，顺序反了会导致脏页永远不落盘
         flushAll();
         closed = true;
         for (TableFile tf : tableFiles.values()) {

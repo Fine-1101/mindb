@@ -9,6 +9,7 @@ import org.junit.jupiter.api.io.TempDir;
 import com.minidb.catalog.ColumnDef;
 import com.minidb.common.DataType;
 import com.minidb.engine.RowEncoder;
+import java.io.RandomAccessFile;
 import java.util.List;
 
 import java.io.IOException;
@@ -277,4 +278,50 @@ class DiskPageTest {
         assertEquals(1, loadedA.slotCount(), "table_a 应该有 1 行");
         assertEquals(1, loadedB.slotCount(), "table_b 应该有 1 行");
     }
+
+    @Test
+    void flushPageWritesOnlyThatPage() throws IOException {
+        Page page0 = pool.newPage(TEST_TABLE);
+        page0.insertRow(new byte[]{1, 2, 3});
+
+        Page page1 = pool.newPage(TEST_TABLE);
+        page1.insertRow(new byte[]{4, 5, 6});
+
+        // 只刷 page 0
+        pool.flushPage(TEST_TABLE, 0);
+
+        // 直接读文件字节，验证只有 page 0 被刷
+        Path file = dataDir.resolve(TEST_TABLE + ".dat");
+        try (RandomAccessFile raf = new RandomAccessFile(file.toFile(), "r")) {
+            // page 0 槽数前缀
+            raf.seek(0);
+            int slot0 = raf.readInt();
+            // page 1 槽数前缀
+            raf.seek(Page.PAGE_SIZE + Page.DISK_PREFIX_SIZE);
+            int slot1 = raf.readInt();
+
+            assertEquals(1, slot0, "page 0 应该有 1 个槽（已刷盘）");
+            assertEquals(0, slot1, "page 1 应该有 0 个槽（未刷盘）");
+        }
+
+        pool.close();
+    }
+
+    @Test
+    void freePageResetsPage() {
+        Page page = pool.newPage(TEST_TABLE);
+        page.insertRow(new byte[]{1, 2, 3});
+        assertEquals(1, page.slotCount());
+        assertTrue(page.freeSpace() < Page.PAGE_SIZE);
+
+        // 释放页
+        pool.freePage(TEST_TABLE, 0);
+
+        Page freedPage = pool.getPage(TEST_TABLE, 0);
+        assertNotNull(freedPage, "释放后页应该还在（空页）");
+        assertEquals(0, freedPage.slotCount(), "释放后槽数应该为 0");
+        assertEquals(Page.PAGE_SIZE, freedPage.freeSpace(), "释放后 freeSpace 应该恢复满页");
+        assertNull(freedPage.readRow(0), "释放后行数据应该为 null");
+    }
+
 }
